@@ -321,8 +321,72 @@ Check internet connectivity and region code:
 docker exec ott-hooks curl https://apis.justwatch.com/graphql
 ```
 
+## 🧪 Testing
 
-## 🤝 Contributing
+### Running Tests
+
+```bash
+# Install dev dependencies
+pip install -r requirements.txt
+
+# Run all tests
+pytest
+
+# Run with coverage report
+pytest --cov=src --cov-report=html
+
+# Run specific test file
+pytest tests/test_config.py -v
+
+# Run tests matching pattern
+pytest -k "telegram" -v
+```
+
+### Test Coverage
+
+Current test coverage: **37%** (43 tests passing)
+
+```
+Module                      Coverage
+----------------------------------
+src/clients/arr_client.py   100%  ✅
+src/clients/telegram.py      83%  ✅
+src/config.py                85%  ✅
+src/models.py               100%  ✅
+src/managers/radarr.py       90%  ✅
+src/managers/sonarr.py       90%  ✅
+```
+
+### Test Structure
+
+```
+tests/
+├── conftest.py           # Shared fixtures
+├── test_config.py        # Configuration tests
+├── test_telegram.py      # Telegram client tests
+├── test_arr_client.py    # *arr HTTP client tests
+├── test_justwatch.py     # JustWatch API tests
+├── test_models.py        # Data models tests
+├── test_managers.py      # Manager logic tests
+└── test_api.py           # API endpoint tests
+```
+
+### Writing New Tests
+
+```python
+def test_your_feature(mock_arr_client, mock_telegram):
+    """Test description"""
+    # Arrange
+    manager = RadarrManager(...)
+    
+    # Act
+    result = manager.some_method()
+    
+    # Assert
+    assert result == expected
+```
+
+## 🐛 Troubleshooting
 
 Contributions welcome! Areas for improvement:
 - [ ] Multi-region support

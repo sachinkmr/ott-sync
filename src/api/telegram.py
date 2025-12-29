@@ -76,10 +76,20 @@ def register_telegram_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable,
 
         # Trigger search
         search_command = COMMAND_MOVIES_SEARCH if item_type == "movie" else COMMAND_SERIES_SEARCH
-        mgr.client.post("command", json={
+        cmd_res = mgr.client.post("command", json={
             "name": search_command,
             f"{item_type}Ids": [item_id],
         })
+
+        # Verify command was accepted
+        if not cmd_res:
+            logger.error(f"[TG] Search command failed for {item_type} id={item_id}")
+            telegram.send(
+                f"⚠️ *Override applied but search failed*\n\n"
+                f"Tags updated, but automatic search could not be triggered.\n"
+                f"Please manually search for {data.get('title', 'item')}."
+            )
+            return {"ok": True}
 
         # Send confirmation
         telegram.send(

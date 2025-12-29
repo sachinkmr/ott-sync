@@ -12,6 +12,7 @@ from ..clients.justwatch import JustWatchClient
 from ..clients.telegram import TelegramNotifier
 from ..constants import DEFAULT_THREAD_POOL_SIZE
 from ..models import ProcessingMetrics, build_telegram_caption
+from ..utils.timestamp_cache import TimestampCache
 
 logger = logging.getLogger("ott-hooks")
 
@@ -28,7 +29,8 @@ class OTTBaseManager(ABC):
         arr_client: ArrClient,
         justwatch_client: JustWatchClient,
         telegram: TelegramNotifier,
-        ott_providers: set[str]
+        ott_providers: set[str],
+        timestamp_cache: TimestampCache | None = None
     ):
         """Initialize OTT manager
         
@@ -37,11 +39,13 @@ class OTTBaseManager(ABC):
             justwatch_client: Client for OTT provider lookup
             telegram: Telegram notification client
             ott_providers: Set of allowed OTT provider names
+            timestamp_cache: Optional timestamp cache for periodic re-checks
         """
         self.client = arr_client
         self.justwatch = justwatch_client
         self.telegram = telegram
         self.ott_providers = ott_providers
+        self.timestamp_cache = timestamp_cache or TimestampCache()
         self.pool = ThreadPoolExecutor(max_workers=DEFAULT_THREAD_POOL_SIZE)
         self._metrics_lock = threading.Lock()
     
@@ -213,7 +217,17 @@ class OTTBaseManager(ABC):
                 # Re-use previous OTT detection for Telegram notification
                 providers = ["OTT"]  # Placeholder to trigger notification flow
         else:
-            providers = self.justwatch.get_providers(title, year, self.ott_providers)
+            # Extract TMDb/IMDb IDs for better matching accuracy
+            tmdb_id = item.get("tmdbId")
+            imdb_id = item.get("imdbId")
+            
+            providers = self.justwatch.get_providers(
+                title, 
+                year, 
+                self.ott_providers,
+                tmdb_id=tmdb_id,
+                imdb_id=imdb_id
+            )
     
             # 🌐 Infra failure → fail open, retry later
             if providers is None:
@@ -254,10 +268,11 @@ class OTTBaseManager(ABC):
                 "callback_data": f"override:{self.item_type()}:{item_id}"
             }]]
     
-            # 📣 Always notify Telegram if OTT found (or re-blocked)
+            # 📣 Best-effort Telegram notification (doesn't affect blocking decision)
+            notification_success = False
             if was_previously_blocked:
                 # Re-blocking scenario - simpler message
-                self.telegram.send(
+                notification_success = self.telegram.send(
                     f"🚨 *Re-block detected*\n\n"
                     f"🎬 *{title}*{f' ({year})' if year else ''}\n\n"
                     f"This item was previously blocked but a download was attempted.\n"
@@ -265,18 +280,31 @@ class OTTBaseManager(ABC):
                     buttons=buttons
                 )
             elif poster:
-                self.telegram.send_photo(poster, caption, buttons=buttons)
+                notification_success = self.telegram.send_photo(poster, caption, buttons=buttons)
             else:
-                self.telegram.send(caption, buttons=buttons)
-    
+                notification_success = self.telegram.send(caption, buttons=buttons)
+
+            # ⚠️ Log notification failure but still enforce block
+            # Primary unblock method: Telegram callback button (when notification works)
+            # Fallback: Manual intervention in Radarr/Sonarr UI (if Telegram is down)
+            if not notification_success:
+                logger.error(
+                    f"[DECISION] Telegram notification FAILED for {self.item_type()} id={item_id}. "
+                    f"Blocking anyway - user won't receive unblock button. "
+                    f"Manual intervention required via Radarr/Sonarr UI if this persists."
+                )
+            
             logger.warning(
                 f"[DECISION] OTT found on {providers[0]} → enforcing block "
                 f"{self.item_type()} id={item_id}"
             )
-    
+
             # 🚫 Enforce block (delete files only if NOT previously blocked)
             self.enforce_block(item_id, delete_files=not was_previously_blocked)
-    
+
+            # 🕒 Update timestamp for periodic re-check
+            self.timestamp_cache.update_check(self.item_type(), item_id)
+
             # ✅ Mark processed AFTER a successful decision
             if self.processed_tag not in tags:
                 res = self.client.get(f"{self.item_type()}/{item_id}")
@@ -284,10 +312,12 @@ class OTTBaseManager(ABC):
                     data = res.json()
                     data["tags"] = list(set(data.get("tags", [])) | {self.processed_tag})
                     self.client.put(f"{self.item_type()}/{item_id}", json=data)
-    
         else:
             # ❌ Not on OTT → mark processed to avoid future lookups
             logger.info("[DECISION] Not on OTT → marking processed")
+            
+            # 🕒 Update timestamp even for not-found items
+            self.timestamp_cache.update_check(self.item_type(), item_id)
     
             if self.processed_tag not in tags:
                 res = self.client.get(f"{self.item_type()}/{item_id}")
@@ -319,16 +349,37 @@ class OTTBaseManager(ABC):
             # Skip unmonitored items
             if not item.get("monitored"):
                 continue
-                
-            if self.processed_tag in tags:
-                metrics.already_processed += 1
+            
+            # 🔄 Check processed_tag BEFORE JustWatch to avoid collision with webhook
+            # BUT allow re-check if item hasn't been checked in 30+ days (OTT availability changes)
+            if self.processed_tag in tags and self.skipped_tag not in tags:
+                # Check if we should re-check this item (30-day period)
+                if not self.timestamp_cache.should_recheck(self.item_type(), item_id, recheck_days=30):
+                    metrics.already_processed += 1
+                    continue
+                else:
+                    logger.info(f"[CRON] Re-checking {item_id} (30+ days since last check)")
+            
+            # 🕵️ Manual unmonitor bypass detection - re-enforce block if monitored with ott-skipped
+            if item.get("monitored") and self.skipped_tag in tags:
+                logger.warning(f"[CRON] Manual unmonitor bypass detected for {item_id}")
+                metrics.cleaned += 1
+                self.enforce_block(item_id, delete_files=False)  # Re-block without deleting files
+                self.timestamp_cache.update_check(self.item_type(), item_id)
                 continue
 
             metrics.checked += 1
+            
+            # Extract TMDb/IMDb IDs for accurate matching
+            tmdb_id = item.get("tmdbId")
+            imdb_id = item.get("imdbId")
+            
             providers = self.justwatch.get_providers(
                 item.get("title"), 
                 item.get("year"),
-                self.ott_providers
+                self.ott_providers,
+                tmdb_id=tmdb_id,
+                imdb_id=imdb_id
             )
             
             if providers is None:
@@ -339,6 +390,7 @@ class OTTBaseManager(ABC):
                 metrics.cleaned += 1
                 # 🗑️ Cron also deletes files (saves disk space)
                 self.enforce_block(item_id, delete_files=True)
+                self.timestamp_cache.update_check(self.item_type(), item_id)
             else:
                 metrics.marked_processed += 1
                 res = self.client.get(f"{self.item_type()}/{item_id}")
@@ -348,6 +400,7 @@ class OTTBaseManager(ABC):
                         set(data.get("tags", [])) | {self.processed_tag}
                     )
                     self.client.put(f"{self.item_type()}/{item_id}", json=data)
+                    self.timestamp_cache.update_check(self.item_type(), item_id)
 
         logger.info(f"[CRON] Completed → {metrics}")
         return metrics
