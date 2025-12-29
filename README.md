@@ -129,27 +129,27 @@ services:
 ```
 ott-sync/
 ├── main.py                   # Entry point with hot reload
-├── src/
-│   ├── config.py            # Configuration management
-│   ├── constants.py         # Tag names, event types
-│   ├── models.py            # Data classes
-│   ├── clients/             # External API clients
-│   │   ├── telegram.py      # Telegram Bot API
-│   │   ├── justwatch.py     # OTT provider lookup
-│   │   └── arr_client.py    # Radarr/Sonarr HTTP client
-│   ├── managers/            # Business logic
-│   │   ├── base.py          # Core OTT governance
-│   │   ├── radarr.py        # Radarr-specific
-│   │   └── sonarr.py        # Sonarr-specific
-│   ├── api/                 # FastAPI routes
-│   │   ├── webhooks.py      # /radarr, /sonarr
-│   │   ├── telegram.py      # /telegram/callback
-│   │   └── health.py        # /health, /cron
-│   ├── cli/                 # CLI commands
-│   │   └── commands.py      # cron, server, run-all
-│   └── utils/               # Utilities
-│       └── reload.py        # Hot reload functionality
-└── ott_hooks.py             # Legacy monolithic version
+└── src/
+    ├── config.py            # Configuration management
+    ├── constants.py         # Tag names, event types
+    ├── models.py            # Data classes
+    ├── clients/             # External API clients
+    │   ├── telegram.py      # Telegram Bot API
+    │   ├── justwatch.py     # OTT provider lookup
+    │   └── arr_client.py    # Radarr/Sonarr HTTP client
+    ├── managers/            # Business logic
+    │   ├── base.py          # Core OTT governance
+    │   ├── radarr.py        # Radarr-specific
+    │   └── sonarr.py        # Sonarr-specific
+    ├── api/                 # FastAPI routes
+    │   ├── webhooks.py      # /radarr, /sonarr
+    │   ├── telegram.py      # /telegram/callback
+    │   └── health.py        # /health, /cron
+    ├── cli/                 # CLI commands
+    │   └── commands.py      # cron, server, run-all
+    └── utils/               # Utilities
+        └── reload.py        # Hot reload functionality
+
 ```
 
 ## 📡 API Endpoints
@@ -287,16 +287,6 @@ For each item:
   - Catch items added outside webhooks
 ```
 
-## 🔒 Security
-
-✅ **No hardcoded credentials** - All secrets in external `config.json`  
-✅ **Non-root Docker user** - Runs as UID 1000  
-✅ **Type-safe code** - Python type hints throughout  
-✅ **Input validation** - Webhook payload validation  
-✅ **Error handling** - Graceful failure modes  
-
-See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for complete analysis.
-
 ## 📝 Tags
 
 | Tag | Purpose | Applied When |
@@ -331,33 +321,10 @@ Check internet connectivity and region code:
 docker exec ott-hooks curl https://apis.justwatch.com/graphql
 ```
 
-## 🏆 Comparison: Old vs New
-
-| Feature | `ott_hooks.py` (590 lines) | New Architecture |
-|---------|----------------------------|------------------|
-| Structure | Monolithic | 15+ modular files |
-| Dependencies | Implicit globals | Dependency injection |
-| Testing | Difficult | Unit-testable |
-| Hot Reload | ❌ No | ✅ Yes |
-| Type Safety | Partial | Complete |
-| Docker | Basic | Production-ready |
-| Documentation | Inline comments | Comprehensive |
-| Maintainability | ⭐⭐ | ⭐⭐⭐⭐⭐ |
-
-## 📚 Documentation
-
-- [CONFIG_RELOAD.md](CONFIG_RELOAD.md) - Hot reload guide
-- [REFACTOR.md](REFACTOR.md) - Refactoring plan
-- [SECURITY_AUDIT.md](SECURITY_AUDIT.md) - Security analysis
-- [TODO.md](TODO.md) - Implementation roadmap
 
 ## 🤝 Contributing
 
 Contributions welcome! Areas for improvement:
-
-- [ ] Unit tests (Phase 7 of refactoring plan)
-- [ ] Integration tests
-- [ ] Additional OTT providers
 - [ ] Multi-region support
 - [ ] Performance optimizations
 
