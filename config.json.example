@@ -1,0 +1,16 @@
+{
+  "radarr_url": "http://your-radarr-server:7878",
+  "radarr_api_key": "YOUR_RADARR_API_KEY_HERE",
+  "sonarr_url": "http://your-sonarr-server:8989",
+  "sonarr_api_key": "YOUR_SONARR_API_KEY_HERE",
+  "ott_providers": ["Netflix", "Prime Video", "Disney Plus Hotstar"],
+  "telegram": {
+    "enabled": true,
+    "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+    "chat_id": "YOUR_TELEGRAM_CHAT_ID_HERE",
+    "region": "India"
+  },
+  "region": "IN",
+  "cron_initial_delay_seconds": 60,
+  "cron_interval_hours": 24
+}
