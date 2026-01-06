@@ -7,10 +7,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.clients.arr_client import ArrClient
-from src.clients.justwatch import JustWatchClient
-from src.clients.telegram import TelegramNotifier
-from src.config import Config
+from ott.clients.arr_client import ArrClient
+from ott.clients.justwatch import JustWatchClient
+from ott.clients.telegram import TelegramNotifier
+from ott.config import Config
 
 
 @pytest.fixture

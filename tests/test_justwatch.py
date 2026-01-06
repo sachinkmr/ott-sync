@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from src.clients.justwatch import JustWatchClient
+from ott.clients.justwatch import JustWatchClient
 
 
 def test_justwatch_initialization():
@@ -25,7 +25,7 @@ def test_justwatch_default_values():
     assert client.max_results == 5
 
 
-@patch('src.clients.justwatch.search')
+@patch('ott.clients.justwatch.search')
 def test_get_providers_found_on_ott(mock_search):
     """Test finding content on allowed OTT provider"""
     # Mock JustWatch search results
@@ -46,7 +46,7 @@ def test_get_providers_found_on_ott(mock_search):
     assert mock_search.called
 
 
-@patch('src.clients.justwatch.search')
+@patch('ott.clients.justwatch.search')
 def test_get_providers_not_found(mock_search):
     """Test content not on any allowed providers"""
     mock_search.return_value = [
@@ -65,7 +65,7 @@ def test_get_providers_not_found(mock_search):
     assert providers == []
 
 
-@patch('src.clients.justwatch.search')
+@patch('ott.clients.justwatch.search')
 def test_get_providers_multiple_providers(mock_search):
     """Test content available on multiple OTT providers"""
     mock_search.return_value = [
@@ -92,7 +92,7 @@ def test_get_providers_multiple_providers(mock_search):
     assert len(providers) == 2
 
 
-@patch('src.clients.justwatch.search')
+@patch('ott.clients.justwatch.search')
 def test_get_providers_wrong_year_filtered(mock_search):
     """Test year filtering works correctly"""
     mock_search.return_value = [
@@ -112,7 +112,7 @@ def test_get_providers_wrong_year_filtered(mock_search):
     assert providers == []
 
 
-@patch('src.clients.justwatch.search')
+@patch('ott.clients.justwatch.search')
 def test_get_providers_no_year(mock_search):
     """Test search without year parameter"""
     mock_search.return_value = [
@@ -131,7 +131,7 @@ def test_get_providers_no_year(mock_search):
     assert "Netflix" in providers
 
 
-@patch('src.clients.justwatch.search')
+@patch('ott.clients.justwatch.search')
 def test_get_providers_api_exception(mock_search):
     """Test API failure returns None (fail-open)"""
     mock_search.side_effect = Exception("API Error")
@@ -143,7 +143,7 @@ def test_get_providers_api_exception(mock_search):
     assert providers is None
 
 
-@patch('src.clients.justwatch.search')
+@patch('ott.clients.justwatch.search')
 def test_get_providers_no_results(mock_search):
     """Test no search results"""
     mock_search.return_value = []
@@ -154,7 +154,7 @@ def test_get_providers_no_results(mock_search):
     assert providers == []
 
 
-@patch('src.clients.justwatch.search')
+@patch('ott.clients.justwatch.search')
 def test_get_providers_no_offers(mock_search):
     """Test content found but no streaming offers"""
     mock_search.return_value = [
@@ -171,7 +171,7 @@ def test_get_providers_no_offers(mock_search):
     assert providers == []
 
 
-@patch('src.clients.justwatch.search')
+@patch('ott.clients.justwatch.search')
 def test_get_providers_only_rent_buy(mock_search):
     """Test content only available for rent/buy (not flatrate)"""
     mock_search.return_value = [

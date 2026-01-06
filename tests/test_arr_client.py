@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-from src.clients.arr_client import ArrClient
+from ott.clients.arr_client import ArrClient
 
 
 def test_arr_client_initialization():
@@ -25,7 +25,7 @@ def test_arr_client_strips_trailing_slash():
     assert client.url == "http://radarr:7878"
 
 
-@patch('src.clients.arr_client.requests.Session.request')
+@patch('ott.clients.arr_client.requests.Session.request')
 def test_get_success(mock_request):
     """Test successful GET request"""
     mock_response = Mock()
@@ -45,7 +45,7 @@ def test_get_success(mock_request):
     assert "http://radarr:7878/api/v3/movie/1" in call_args[0]
 
 
-@patch('src.clients.arr_client.requests.Session.request')
+@patch('ott.clients.arr_client.requests.Session.request')
 def test_get_with_params(mock_request):
     """Test GET request with query parameters"""
     mock_response = Mock()
@@ -59,7 +59,7 @@ def test_get_with_params(mock_request):
     assert mock_request.called
 
 
-@patch('src.clients.arr_client.requests.Session.request')
+@patch('ott.clients.arr_client.requests.Session.request')
 def test_post_success(mock_request):
     """Test successful POST request"""
     mock_response = Mock()
@@ -78,7 +78,7 @@ def test_post_success(mock_request):
     assert call_args[1]["json"] == payload
 
 
-@patch('src.clients.arr_client.requests.Session.request')
+@patch('ott.clients.arr_client.requests.Session.request')
 def test_put_success(mock_request):
     """Test successful PUT request"""
     mock_response = Mock()
@@ -93,7 +93,7 @@ def test_put_success(mock_request):
     assert response.status_code == 202
 
 
-@patch('src.clients.arr_client.requests.Session.request')
+@patch('ott.clients.arr_client.requests.Session.request')
 def test_delete_success(mock_request):
     """Test successful DELETE request"""
     mock_response = Mock()
@@ -107,7 +107,7 @@ def test_delete_success(mock_request):
     assert response.status_code == 200
 
 
-@patch('src.clients.arr_client.requests.Session.request')
+@patch('ott.clients.arr_client.requests.Session.request')
 def test_request_failure_returns_none(mock_request):
     """Test failed request returns None"""
     mock_request.side_effect = requests.RequestException("Connection error")
@@ -118,7 +118,7 @@ def test_request_failure_returns_none(mock_request):
     assert response is None
 
 
-@patch('src.clients.arr_client.requests.Session.request')
+@patch('ott.clients.arr_client.requests.Session.request')
 def test_http_error_returns_none(mock_request):
     """Test HTTP error (4xx/5xx) logs error and returns None"""
     mock_response = Mock()
@@ -134,7 +134,7 @@ def test_http_error_returns_none(mock_request):
     assert response is None
 
 
-@patch('src.clients.arr_client.requests.Session.request')
+@patch('ott.clients.arr_client.requests.Session.request')
 def test_timeout_returns_none(mock_request):
     """Test timeout returns None"""
     mock_request.side_effect = requests.Timeout("Request timed out")
@@ -145,7 +145,7 @@ def test_timeout_returns_none(mock_request):
     assert response is None
 
 
-@patch('src.clients.arr_client.requests.Session.request')
+@patch('ott.clients.arr_client.requests.Session.request')
 def test_api_key_header_sent(mock_request):
     """Test X-Api-Key header is included"""
     mock_response = Mock()

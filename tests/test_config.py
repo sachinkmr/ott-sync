@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from src.config import Config
+from ott.config import Config
 
 
 def test_config_initialization(sample_config_dict):

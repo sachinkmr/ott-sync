@@ -48,6 +48,7 @@ class OTTBaseManager(ABC):
         self.timestamp_cache = timestamp_cache or TimestampCache()
         self.pool = ThreadPoolExecutor(max_workers=DEFAULT_THREAD_POOL_SIZE)
         self._metrics_lock = threading.Lock()
+        self._tag_cache: dict[int, str] = {}  # Cache tag ID -> label mapping
     
     # -------------------- Tags --------------------
     @cached_property
@@ -89,6 +90,71 @@ class OTTBaseManager(ABC):
             raise RuntimeError(f"Failed to create tag '{label}'")
         
         return res.json()["id"]
+    
+    def _get_tag_labels(self, tag_ids: list[int]) -> dict[int, str]:
+        """Get tag labels for given tag IDs with caching
+        
+        Args:
+            tag_ids: List of tag IDs to resolve
+            
+        Returns:
+            Dictionary mapping tag ID to label
+        """
+        # Check which tags need fetching
+        missing_ids = [tid for tid in tag_ids if tid not in self._tag_cache]
+        
+        if missing_ids:
+            # Fetch all tags from API (refresh cache)
+            res = self.client.get("tag")
+            if res:
+                for tag in res.json():
+                    self._tag_cache[tag["id"]] = tag["label"]
+        
+        # Return requested tag labels
+        return {tid: self._tag_cache.get(tid, f"unknown-{tid}") for tid in tag_ids}
+    
+    def _extract_plex_users(self, tag_ids: list[int]) -> list[str]:
+        """Extract Plex usernames from pulsarr tags
+        
+        Args:
+            tag_ids: List of tag IDs from item
+            
+        Returns:
+            List of Plex usernames (empty if none found)
+        """
+        if not tag_ids:
+            return []
+        
+        tag_labels = self._get_tag_labels(tag_ids)
+        users = []
+        
+        for tag_id, label in tag_labels.items():
+            # Parse format: pulsarr-user-{username}
+            if label.startswith("pulsarr-user-"):
+                username = label.replace("pulsarr-user-", "")
+                if username:  # Ensure not empty
+                    users.append(username)
+        
+        return users
+    
+    def _extract_plex_user(self, item: dict[str, Any]) -> str | None:
+        """Extract Plex user from item metadata
+        
+        Plex watchlist items may have user info in tags or custom fields.
+        
+        Args:
+            item: Item dictionary from webhook payload
+            
+        Returns:
+            Plex username if found, None otherwise
+        """
+        # Check for Plex-specific fields in item metadata
+        # (These field names may vary based on your Plex/Radarr/Sonarr integration)
+        return (
+            item.get("plexUser")
+            or item.get("addedBy")
+            or item.get("source", {}).get("user") if isinstance(item.get("source"), dict) else None
+        )
 
     # -------------------- Enforcement --------------------
     def enforce_block(self, item_id: int, delete_files: bool = True) -> None:
@@ -174,6 +240,8 @@ class OTTBaseManager(ABC):
         Args:
             payload: Webhook payload containing event type and item data
         """
+        import json
+        
         event = payload.get("eventType")
         item = payload.get(self.item_type(), {})
     
@@ -182,9 +250,15 @@ class OTTBaseManager(ABC):
         item_id = item.get("id")
         tags = set(item.get("tags", []))
     
+        # 📊 Log webhook payload structure for debugging
         logger.info(f"[WEBHOOK] {event} → {title} ({year}) id={item_id}")
+        logger.info(f"[WEBHOOK] Payload keys: {list(payload.keys())}")
+        logger.info(f"[WEBHOOK] Item keys: {list(item.keys())}")
+        logger.debug(f"[WEBHOOK] Full payload:\n{json.dumps(payload, indent=2, default=str)}")
     
-        if event not in ("MovieAdded", "SeriesAdded", "Grab"):
+        # Handle Add/Grab events (flexible matching for variants)
+        if not event.startswith(("MovieAdd", "SeriesAdd", "Grab", "Download")):
+            logger.debug(f"[WEBHOOK] Ignoring event type: {event}")
             return
     
         # 🔒 Absolute override guard
@@ -245,13 +319,18 @@ class OTTBaseManager(ABC):
                 None,
             )
     
-            # 👤 Best-effort requester info
-            requested_by = (
-                payload.get("username")
-                or payload.get("requestedBy")
-                or payload.get("author")
-                or "Overseerr"
-            )
+            # 👤 Extract requester info (Plex users or automated)
+            plex_users = self._extract_plex_users(list(tags))
+            
+            if plex_users:
+                # Multiple Plex users can watchlist the same item
+                users_str = ", ".join(plex_users)
+                requested_by = f"{users_str} (Plex)"
+                logger.info(f"[WEBHOOK] Plex watchlist by: {users_str}")
+            else:
+                # No Plex tags - manual add or list import
+                requested_by = "Automated"
+                logger.info(f"[WEBHOOK] Source: Automated (manual/list)")
     
             caption = build_telegram_caption(
                 title=title,

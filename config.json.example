@@ -12,5 +12,9 @@
   },
   "region": "IN",
   "cron_initial_delay_seconds": 60,
-  "cron_interval_hours": 24
+  "cron_interval_hours": 24,
+  "justwatch_rate_limit": {
+    "max_calls": 60,
+    "period_seconds": 60
+  }
 }

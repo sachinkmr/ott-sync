@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.models import ProcessingMetrics, build_telegram_caption
+from ott.models import ProcessingMetrics, build_telegram_caption
 
 
 def test_processing_metrics_initialization():
@@ -110,7 +110,7 @@ def test_build_telegram_caption_no_requester():
     assert "👤 *Requested by:* Unknown" in caption
 
 
-@patch('src.models.datetime')
+@patch('ott.models.datetime')
 def test_build_telegram_caption_timestamp(mock_datetime):
     """Test timestamp formatting in caption"""
     # Mock datetime to return fixed time

@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-from src.clients.telegram import TelegramNotifier
+from ott.clients.telegram import TelegramNotifier
 
 
 def test_telegram_initialization_enabled():
@@ -47,7 +47,7 @@ def test_telegram_initialization_missing_credentials():
     assert notifier.enabled is False
 
 
-@patch('src.clients.telegram.requests.post')
+@patch('ott.clients.telegram.requests.post')
 def test_send_message_success(mock_post):
     """Test sending text message successfully"""
     mock_response = Mock()
@@ -71,7 +71,7 @@ def test_send_message_success(mock_post):
     assert call_args[1]["json"]["chat_id"] == "test_chat"
 
 
-@patch('src.clients.telegram.requests.post')
+@patch('ott.clients.telegram.requests.post')
 def test_send_message_with_buttons(mock_post):
     """Test sending message with inline keyboard"""
     mock_response = Mock()
@@ -94,7 +94,7 @@ def test_send_message_with_buttons(mock_post):
     assert payload["reply_markup"]["inline_keyboard"] == buttons
 
 
-@patch('src.clients.telegram.requests.post')
+@patch('ott.clients.telegram.requests.post')
 def test_send_message_failure(mock_post):
     """Test sending message failure"""
     mock_response = Mock()
@@ -115,7 +115,7 @@ def test_send_message_failure(mock_post):
     assert result is False
 
 
-@patch('src.clients.telegram.requests.post')
+@patch('ott.clients.telegram.requests.post')
 def test_send_message_request_exception(mock_post):
     """Test sending message with network error"""
     mock_post.side_effect = requests.RequestException("Network error")
@@ -142,7 +142,7 @@ def test_send_message_disabled():
     assert result is False
 
 
-@patch('src.clients.telegram.requests.post')
+@patch('ott.clients.telegram.requests.post')
 def test_send_photo_success(mock_post):
     """Test sending photo with caption"""
     mock_response = Mock()
@@ -164,7 +164,7 @@ def test_send_photo_success(mock_post):
     assert payload["caption"] == "Caption text"
 
 
-@patch('src.clients.telegram.requests.post')
+@patch('ott.clients.telegram.requests.post')
 def test_send_photo_with_buttons(mock_post):
     """Test sending photo with inline buttons"""
     mock_response = Mock()
@@ -186,7 +186,7 @@ def test_send_photo_with_buttons(mock_post):
     assert "reply_markup" in payload
 
 
-@patch('src.clients.telegram.requests.post')
+@patch('ott.clients.telegram.requests.post')
 def test_send_photo_failure(mock_post):
     """Test photo send failure"""
     mock_response = Mock()

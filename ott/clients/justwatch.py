@@ -12,20 +12,33 @@ logger = logging.getLogger("ott-hooks")
 class JustWatchClient:
     """Client for querying OTT availability via JustWatch API"""
     
-    def __init__(self, region: str = "IN", language: str = "en", max_results: int = 5):
+    def __init__(
+        self, 
+        region: str = "IN", 
+        language: str = "en", 
+        max_results: int = 5,
+        rate_limit_calls: int = 60,
+        rate_limit_period: int = 60
+    ):
         """Initialize JustWatch client
         
         Args:
             region: Country/region code (e.g., "IN", "US", "GB")
             language: Language code (e.g., "en", "es", "fr")
             max_results: Maximum number of search results to process
+            rate_limit_calls: Maximum API calls allowed in period (default: 60)
+            rate_limit_period: Time period in seconds (default: 60)
         """
         self.region = region
         self.language = language
         self.max_results = max_results
         
-        # Rate limiter: 10 calls per minute to avoid API throttling
-        self.rate_limiter = RateLimiter(max_calls=10, period_seconds=60)
+        # Configurable rate limiter to avoid API throttling
+        self.rate_limiter = RateLimiter(
+            max_calls=rate_limit_calls, 
+            period_seconds=rate_limit_period
+        )
+        logger.info(f"[JustWatch] Rate limit: {rate_limit_calls} calls per {rate_limit_period}s")
     
     def get_providers(
         self,
@@ -58,37 +71,48 @@ class JustWatchClient:
             try:
                 results = search(title, self.region, self.language, self.max_results)
                 
+                # Strategy: Check ID-matched results first (most accurate), 
+                # then fall back to year-matched results (metadata resilience)
+                id_matched_results = []
+                year_matched_results = []
+                
                 for item in results:
-                    # Prefer ID-based matching if available (most accurate)
+                    provider_names = [offer.package.name for offer in item.offers]
+                    logger.info(f"[JustWatch] Available on: {provider_names}")
+                    
+                    # Check if this result matches our IDs
                     id_match = False
-                    if tmdb_id and hasattr(item, 'tmdb_id'):
-                        id_match = item.tmdb_id == tmdb_id
-                    elif imdb_id and hasattr(item, 'imdb_id'):
-                        id_match = item.imdb_id == imdb_id
+                    if tmdb_id and hasattr(item, 'tmdb_id') and item.tmdb_id == tmdb_id:
+                        id_match = True
+                    elif imdb_id and hasattr(item, 'imdb_id') and item.imdb_id == imdb_id:
+                        id_match = True
                     
-                    # If IDs provided but don't match, skip
-                    if (tmdb_id or imdb_id) and not id_match:
-                        continue
-                    
-                    # Filter by year if provided (with ±1 year tolerance)
-                    # Skip year check if ID matched (year can differ for multi-season shows)
-                    if not id_match and year and abs(item.release_year - year) > 1:
-                        continue
-                    
-                    # Check if available on any allowed providers
-                    if not item.offers:
-                        continue
-                    
-                    # Only consider subscription streaming (flatrate), not rent/buy
+                    # Categorize results by match quality
+                    if id_match:
+                        id_matched_results.append(item)
+                    elif not year or abs(item.release_year - year) <= 1:
+                        year_matched_results.append(item)
+                
+                # Check ID-matched results first (best accuracy)
+                for item in id_matched_results:
                     found = [
                         offer.package.name
                         for offer in item.offers
                         if offer.package.name in allowed_providers
-                        and offer.monetization_type == "flatrate"  # Subscription only!
                     ]
-                    
                     if found:
-                        logger.info(f"[JustWatch] FOUND on {found} (subscription)")
+                        logger.info(f"[JustWatch] FOUND on {found} (ID match)")
+                        return found
+                
+                # Fall back to year-matched results (metadata resilience)
+                for item in year_matched_results:
+                    found = [
+                        offer.package.name
+                        for offer in item.offers
+                        if offer.package.name in allowed_providers
+                    ]
+                    if found:
+                        logger.info(f"[JustWatch] FOUND on {found} (year match, ID not available)")
                         return found
                 
                 # Searched but not found on any allowed providers

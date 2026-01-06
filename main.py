@@ -19,28 +19,28 @@ logging.basicConfig(
 logger = logging.getLogger("ott-hooks")
 
 # Import configuration
-from src.config import Config
+from ott.config import Config
 
 # Import clients
-from src.clients.telegram import TelegramNotifier
-from src.clients.justwatch import JustWatchClient
-from src.clients.arr_client import ArrClient
+from ott.clients.telegram import TelegramNotifier
+from ott.clients.justwatch import JustWatchClient
+from ott.clients.arr_client import ArrClient
 
 # Import managers
-from src.managers.radarr import RadarrManager
-from src.managers.sonarr import SonarrManager
+from ott.managers.radarr import RadarrManager
+from ott.managers.sonarr import SonarrManager
 
 # Import API modules
-from src.api.app import app as fastapi_app
-from src.api.webhooks import register_webhook_routes
-from src.api.telegram import register_telegram_routes
-from src.api.health import register_health_routes
+from ott.api.app import app as fastapi_app
+from ott.api.webhooks import register_webhook_routes
+from ott.api.telegram import register_telegram_routes
+from ott.api.health import register_health_routes
 
 # Import CLI
-from src.cli.commands import app as cli_app, register_commands
+from ott.cli.commands import app as cli_app, register_commands
 
 # Import reload utilities
-from src.utils.reload import ConfigReloader
+from ott.utils.reload import ConfigReloader
 
 # Global state for hot reload
 _managers = {}
@@ -59,7 +59,11 @@ def reload_configuration():
         
         # Reinitialize clients
         telegram = TelegramNotifier(config.telegram)
-        justwatch = JustWatchClient(region=config.region)
+        justwatch = JustWatchClient(
+            region=config.region,
+            rate_limit_calls=config.justwatch_rate_limit_calls,
+            rate_limit_period=config.justwatch_rate_limit_period
+        )
         
         radarr_client = ArrClient(config.radarr_url, config.radarr_api_key)
         sonarr_client = ArrClient(config.sonarr_url, config.sonarr_api_key)
@@ -108,7 +112,11 @@ def main():
     # Initialize clients
     logger.info("Initializing clients...")
     telegram = TelegramNotifier(config.telegram)
-    justwatch = JustWatchClient(region=config.region)
+    justwatch = JustWatchClient(
+        region=config.region,
+        rate_limit_calls=config.justwatch_rate_limit_calls,
+        rate_limit_period=config.justwatch_rate_limit_period
+    )
     
     radarr_client = ArrClient(config.radarr_url, config.radarr_api_key)
     sonarr_client = ArrClient(config.sonarr_url, config.sonarr_api_key)

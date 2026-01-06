@@ -5,9 +5,9 @@ from unittest.mock import Mock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from src.api.app import app
-from src.managers.radarr import RadarrManager
-from src.managers.sonarr import SonarrManager
+from ott.api.app import app
+from ott.managers.radarr import RadarrManager
+from ott.managers.sonarr import SonarrManager
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ class TestHealthEndpoints:
 class TestWebhookEndpoints:
     """Tests for webhook endpoints"""
     
-    @patch('src.api.webhooks.get_radarr_mgr')
+    @patch('ott.api.webhooks.get_radarr_mgr')
     def test_radarr_webhook_movie_added(self, mock_get_mgr, client):
         """Test /radarr webhook with MovieAdded event"""
         mock_manager = Mock(spec=RadarrManager)
@@ -61,7 +61,7 @@ class TestWebhookEndpoints:
         assert response.json()["status"] == "processed"
         assert mock_manager.added_hook.called
     
-    @patch('src.api.webhooks.get_sonarr_mgr')
+    @patch('ott.api.webhooks.get_sonarr_mgr')
     def test_sonarr_webhook_series_added(self, mock_get_mgr, client):
         """Test /sonarr webhook with SeriesAdd event"""
         mock_manager = Mock(spec=SonarrManager)
@@ -82,7 +82,7 @@ class TestWebhookEndpoints:
         assert response.json()["status"] == "processed"
         assert mock_manager.added_hook.called
     
-    @patch('src.api.webhooks.get_radarr_mgr')
+    @patch('ott.api.webhooks.get_radarr_mgr')
     def test_webhook_invalid_payload(self, mock_get_mgr, client):
         """Test webhook with invalid payload"""
         mock_manager = Mock(spec=RadarrManager)
@@ -100,7 +100,7 @@ class TestWebhookEndpoints:
 class TestTelegramEndpoints:
     """Tests for Telegram callback endpoints"""
     
-    @patch('src.api.telegram.get_radarr_mgr')
+    @patch('ott.api.telegram.get_radarr_mgr')
     def test_telegram_callback_movie_override(self, mock_get_mgr, client):
         """Test /telegram/callback for movie override"""
         mock_manager = Mock(spec=RadarrManager)
@@ -136,7 +136,7 @@ class TestTelegramEndpoints:
         assert data["status"] == "override_applied"
         assert "Test Movie" in data["message"]
     
-    @patch('src.api.telegram.get_sonarr_mgr')
+    @patch('ott.api.telegram.get_sonarr_mgr')
     def test_telegram_callback_series_override(self, mock_get_mgr, client):
         """Test /telegram/callback for series override"""
         mock_manager = Mock(spec=SonarrManager)
@@ -185,7 +185,7 @@ class TestTelegramEndpoints:
     
     def test_telegram_callback_missing_item(self, client):
         """Test /telegram/callback when item not found"""
-        with patch('src.api.telegram.get_radarr_mgr') as mock_get_mgr:
+        with patch('ott.api.telegram.get_radarr_mgr') as mock_get_mgr:
             mock_manager = Mock(spec=RadarrManager)
             mock_manager.item_type.return_value = "movie"
             mock_manager.client.get.return_value = None  # Item not found
@@ -209,15 +209,15 @@ class TestTelegramEndpoints:
 class TestCronEndpoint:
     """Tests for manual cron trigger endpoint"""
     
-    @patch('src.api.health.get_radarr_mgr')
-    @patch('src.api.health.get_sonarr_mgr')
+    @patch('ott.api.health.get_radarr_mgr')
+    @patch('ott.api.health.get_sonarr_mgr')
     def test_cron_endpoint(self, mock_sonarr_mgr, mock_radarr_mgr, client):
         """Test /cron manual trigger endpoint"""
         mock_radarr = Mock(spec=RadarrManager)
         mock_sonarr = Mock(spec=SonarrManager)
         
         # Mock cron_cleanup to return metrics
-        from src.models import ProcessingMetrics
+        from ott.models import ProcessingMetrics
         mock_radarr.cron_cleanup.return_value = ProcessingMetrics(checked=5, cleaned=2)
         mock_sonarr.cron_cleanup.return_value = ProcessingMetrics(checked=3, cleaned=1)
         

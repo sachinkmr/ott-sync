@@ -4,9 +4,9 @@ from unittest.mock import Mock, call, patch
 
 import pytest
 
-from src.managers.radarr import RadarrManager
-from src.managers.sonarr import SonarrManager
-from src.models import ProcessingMetrics
+from ott.managers.radarr import RadarrManager
+from ott.managers.sonarr import SonarrManager
+from ott.models import ProcessingMetrics
 
 
 class TestRadarrManager:

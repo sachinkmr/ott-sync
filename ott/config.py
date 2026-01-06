@@ -38,6 +38,11 @@ class Config:
         # Region for JustWatch
         self.region: str = config_dict.get("region", "IN")
         
+        # JustWatch rate limiting
+        rate_limit_config = config_dict.get("justwatch_rate_limit", {})
+        self.justwatch_rate_limit_calls: int = rate_limit_config.get("max_calls", 60)
+        self.justwatch_rate_limit_period: int = rate_limit_config.get("period_seconds", 60)
+        
         # Store full config for compatibility
         self._raw_config = config_dict
     
