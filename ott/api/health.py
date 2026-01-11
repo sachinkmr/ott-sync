@@ -25,6 +25,37 @@ def register_health_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable):
         """
         return {"status": "ok"}
     
+    @app.get("/wakeup")
+    async def wakeup():
+        """Run the script alias wake_beast 
+        
+        Returns:
+            Status OK
+        """
+        import subprocess
+        try:            
+            MAC = "d8:5e:d3:89:7e:ae"
+            BROADCAST = "192.168.1.255"
+
+            cmd = [
+                "wakeonlan",
+                "-i", BROADCAST,
+                MAC
+            ]
+            logger.info("⚡ Waking Beast PC...")
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info("✅ Magic packet sent")
+            return {"status": "ok", "message": "Magic packet sent successfully"}
+        except FileNotFoundError:
+            logger.error("wakeonlan command not found - install wakeonlan package")
+            return {
+                "status": "error", 
+                "message": "wakeonlan command not found. Install with: apt-get install wakeonlan"
+            }
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to send wake-on-LAN packet: {e.stderr}")
+            return {"status": "error", "message": f"Failed to send packet: {e.stderr}"}
+    
     @app.get("/cron")
     async def trigger_cron():
         """Manually trigger cron cleanup

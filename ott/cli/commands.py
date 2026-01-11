@@ -50,6 +50,60 @@ def register_commands(get_radarr_mgr: Callable, get_sonarr_mgr: Callable, fastap
         logger.info("Cron cleanup completed for all services")
 
     @app.command()
+    def migrate_ott_tags(
+        service: str = typer.Argument(
+            ...,
+            help="Service to migrate: 'radarr', 'sonarr', or 'all'"
+        ),
+        unmonitor: bool = typer.Option(
+            False,
+            "--unmonitor",
+            help="Also unmonitor items found on OTT (default: False)"
+        )
+    ):
+        """Add OTT provider tags to all existing items
+        
+        Scans all items in Radarr/Sonarr and adds tags for items on OTT platforms:
+        - Provider tags (ott-netflix, ott-prime-video, etc.)
+        - ott-skipped tag (indicates item was blocked)
+        - ott-processed tag (indicates item was checked)
+        
+        By default, monitoring status is NOT changed (tags only).
+        Use --unmonitor to also disable monitoring for items on OTT.
+        
+        Examples:
+            # Tag items but keep monitoring status
+            python main.py migrate-ott-tags radarr
+            
+            # Tag items AND unmonitor those on OTT
+            python main.py migrate-ott-tags radarr --unmonitor
+            
+            # Process all services
+            python main.py migrate-ott-tags all --unmonitor
+        """
+        logger.info("=" * 60)
+        logger.info("Starting OTT provider tag migration")
+        if unmonitor:
+            logger.info("⚠️  UNMONITOR MODE: Items on OTT will be unmonitored")
+        else:
+            logger.info("📌 TAG-ONLY MODE: Monitoring status will NOT be changed")
+        logger.info("=" * 60)
+        
+        if service.lower() in ["radarr", "all"]:
+            logger.info("\n📽️ Migrating Radarr movies...")
+            radarr_stats = get_radarr_mgr().migrate_ott_tags(unmonitor=unmonitor)
+            logger.info(f"✅ Radarr migration complete: {radarr_stats}")
+        
+        if service.lower() in ["sonarr", "all"]:
+            logger.info("\n📺 Migrating Sonarr series...")
+            sonarr_stats = get_sonarr_mgr().migrate_ott_tags(unmonitor=unmonitor)
+            logger.info(f"✅ Sonarr migration complete: {sonarr_stats}")
+        
+        logger.info("\n" + "=" * 60)
+        logger.info("OTT provider tag migration completed!")
+        logger.info("=" * 60)
+
+    @app.command()
     def server(
         host: str = typer.Option(
             DEFAULT_SERVER_HOST,

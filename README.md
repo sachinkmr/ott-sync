@@ -14,8 +14,10 @@ OTT Hooks integrates with Radarr/Sonarr to:
 - ✅ **Block downloads** for content on Netflix, Prime, Disney+, etc.
 - ✅ **Send Telegram alerts** with override buttons
 - ✅ **Human override capability** via interactive buttons
+- ✅ **Provider tagging** - Tag items with specific platforms (ott-netflix, ott-prime-video, etc.)
 - ✅ **Scheduled reconciliation** to catch missed items
 - ✅ **Hot reload config** without container restart
+- ✅ **Migration tools** to retroactively tag existing libraries
 
 ## 📋 Features
 
@@ -28,6 +30,7 @@ OTT Hooks integrates with Radarr/Sonarr to:
 - Cancels pending downloads
 - Unmonitors blocked items
 - Deletes downloaded files (saves disk space)
+- Tags items with OTT providers (ott-netflix, ott-prime-video, etc.)
 - Tags items for tracking (`ott-skipped`, `ott-processed`, `ott-override`)
 
 ### Human Control
@@ -35,15 +38,6 @@ OTT Hooks integrates with Radarr/Sonarr to:
 - One-click override buttons
 - Re-blocking detection (prevents bypass)
 - User-friendly status messages
-
-### Production Ready
-- Modular architecture (15+ Python modules)
-- Type hints throughout
-- Comprehensive logging
-- Docker containerization
-- Non-root user for security
-- Health check endpoints
-- Configuration hot reload
 
 ## 🚀 Quick Start
 
@@ -122,34 +116,22 @@ services:
    # Start chat with bot, then:
    curl https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
    ```
-4. Add credentials to `config.json`
+4. **Register webhook** (Required for callbacks to work):
+   ```bash
+   curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "url": "https://your-domain.com:9123/telegram/callback",
+       "allowed_updates": ["callback_query"]
+     }'
+   ```
+   **Note**: Your server must be publicly accessible via HTTPS for callbacks to work.
 
-## 🏗️ Architecture
+5. Add credentials to `config.json`
 
-```
-ott-sync/
-├── main.py                   # Entry point with hot reload
-└── src/
-    ├── config.py            # Configuration management
-    ├── constants.py         # Tag names, event types
-    ├── models.py            # Data classes
-    ├── clients/             # External API clients
-    │   ├── telegram.py      # Telegram Bot API
-    │   ├── justwatch.py     # OTT provider lookup
-    │   └── arr_client.py    # Radarr/Sonarr HTTP client
-    ├── managers/            # Business logic
-    │   ├── base.py          # Core OTT governance
-    │   ├── radarr.py        # Radarr-specific
-    │   └── sonarr.py        # Sonarr-specific
-    ├── api/                 # FastAPI routes
-    │   ├── webhooks.py      # /radarr, /sonarr
-    │   ├── telegram.py      # /telegram/callback
-    │   └── health.py        # /health, /cron
-    ├── cli/                 # CLI commands
-    │   └── commands.py      # cron, server, run-all
-    └── utils/               # Utilities
-        └── reload.py        # Hot reload functionality
-
+**Verify webhook status:**
+```bash
+curl "https://api.telegram.org/bot<YOUR_TOKEN>/getWebhookInfo"
 ```
 
 ## 📡 API Endpoints
@@ -159,7 +141,7 @@ ott-sync/
 | `/health` | GET | Health check for monitoring |
 | `/radarr` | POST | Webhook from Radarr |
 | `/sonarr` | POST | Webhook from Sonarr |
-| `/telegram/callback` | POST | Override button handler |
+| `/telegram/callback` | POST | Telegram callback handler (override buttons) |
 | `/cron` | GET | Manual cron trigger |
 | `/docs` | GET | OpenAPI documentation |
 
@@ -184,23 +166,6 @@ Use ISO 3166-1 alpha-2 codes:
 - `CA` - Canada
 - `AU` - Australia
 
-### Hot Reload
-
-Change config without restarting:
-
-**Method 1: File modification** (automatic after 30s)
-```bash
-vim /path/to/config/config.json
-# Changes detected and applied automatically
-```
-
-**Method 2: SIGHUP signal** (immediate)
-```bash
-docker kill -s HUP ott-hooks
-```
-
-See [CONFIG_RELOAD.md](CONFIG_RELOAD.md) for details.
-
 ## 🎮 Usage
 
 ### CLI Commands
@@ -213,9 +178,13 @@ python main.py run-all --host 0.0.0.0 --port 9123
 python main.py server --host 0.0.0.0 --port 9123
 
 # Run cron cleanup once
-python main.py cron --service radarr
-python main.py cron --service sonarr
-python main.py cron --service all
+python main.py cron
+
+# Migrate existing libraries (add OTT provider tags)
+python main.py migrate-ott-tags radarr           # Radarr only
+python main.py migrate-ott-tags sonarr           # Sonarr only
+python main.py migrate-ott-tags all              # Both services
+python main.py migrate-ott-tags all --unmonitor  # Also unmonitor OTT items
 ```
 
 ### Docker
@@ -287,13 +256,125 @@ For each item:
   - Catch items added outside webhooks
 ```
 
-## 📝 Tags
+## � Migrating Existing Libraries
+
+### One-Time Migration
+
+Retroactively tag all existing items with OTT provider tags:
+
+```bash
+# Tag all movies and series (recommended)
+docker exec ott-hooks python main.py migrate-ott-tags all
+
+# Tag Radarr movies only
+docker exec ott-hooks python main.py migrate-ott-tags radarr
+
+# Tag Sonarr series only
+docker exec ott-hooks python main.py migrate-ott-tags sonarr
+
+# Also unmonitor items found on OTT
+docker exec ott-hooks python main.py migrate-ott-tags all --unmonitor
+```
+
+### What Migration Does
+
+1. ✅ Scans all items in your library
+2. ✅ Looks up OTT availability via JustWatch
+3. ✅ Adds provider tags (ott-netflix, ott-prime-video, etc.)
+4. ✅ Adds `ott-skipped` tag for blocked items
+5. ✅ Adds `ott-processed` tag for all checked items
+6. ✅ Optionally unmonitors items with `--unmonitor` flag
+7. ✅ Skips items with `ott-override` tag
+8. ✅ Progress logging every 50 items
+
+### Performance Notes
+
+- ⏱️ **Time**: ~16-20 minutes for 1000 items (respects JustWatch rate limits)
+- 🔄 **Rate Limiting**: 60 API calls per 60 seconds
+- 🔒 **Safe**: Can run during normal operation
+- 📊 **Statistics**: Provides detailed report when complete
+
+### Migration Output Example
+
+```
+============================================================
+Starting OTT provider tag migration
+📌 TAG-ONLY MODE: Monitoring status will NOT be changed
+============================================================
+
+🎬 Migrating Radarr movies...
+[OTT-MIGRATE] Processing 1253 items...
+[OTT-MIGRATE] Progress: 50/1253 items processed
+[OTT-MIGRATE] The Batman found on: Netflix, Prime Video
+[OTT-MIGRATE] Progress: 100/1253 items processed
+...
+[OTT-MIGRATE] Migration complete: {
+  'total': 1253,
+  'tagged': 456,
+  'not_on_ott': 650,
+  'already_tagged': 120,
+  'errors': 5,
+  'skipped_override': 22
+}
+✅ Radarr migration complete
+
+============================================================
+OTT provider tag migration completed!
+============================================================
+```
+
+## �📝 Tags
+
+### System Tags
 
 | Tag | Purpose | Applied When |
-|-----|---------|--------------|
+|-----|---------|--------------||
 | `ott-skipped` | Item blocked due to OTT | Found on streaming service |
 | `ott-processed` | Item already checked | After JustWatch lookup |
 | `ott-override` | User approved download | Telegram override button |
+
+### Provider Tags
+
+Items found on OTT platforms are automatically tagged with provider-specific tags:
+
+| Provider | Tag Created |
+|----------|-------------|
+| Netflix | `ott-netflix` |
+| Prime Video | `ott-prime-video` |
+| Disney Plus Hotstar | `ott-disney-plus-hotstar` |
+| Apple TV+ | `ott-apple-tv` |
+| HBO Max | `ott-hbo-max` |
+| And more... | `ott-{provider-name}` |
+
+**Benefits:**
+- 📊 Track which platforms have your content
+- 🔍 Filter/search by provider in Radarr/Sonarr
+- 📈 Analytics on OTT distribution
+- 🏷️ Historical record (tags kept even after override)
+
+**Tag Behavior:**
+- **Webhooks**: Add all provider tags when item is found on OTT
+- **Cron**: Update tags (add new, remove stale)
+- **Override**: Provider tags are kept for tracking
+- **Not on OTT**: No provider tags added
+
+### Tag Combinations
+
+**Item on Netflix (blocked):**
+```
+Tags: ott-netflix, ott-skipped, ott-processed
+```
+
+**User approves download:**
+```
+Tags: ott-netflix, ott-override, ott-processed
+      ↑ Provider tag kept for tracking
+```
+
+**Item not on any OTT:**
+```
+Tags: ott-processed
+```
 
 ## 🐛 Troubleshooting
 
@@ -302,6 +383,16 @@ Ensure `/config/config.json` exists in container:
 ```bash
 docker exec ott-hooks ls -la /config/
 ```
+
+### "Telegram callbacks not working"
+1. Verify webhook is registered:
+   ```bash
+   curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
+   ```
+2. Check for errors in webhook info (502 = server not accessible)
+3. Ensure server is publicly accessible via HTTPS
+4. Verify port 9123 is exposed: `docker ps | grep ott-hooks`
+5. Test endpoint locally: `curl http://localhost:9123/health`
 
 ### "Telegram not sending notifications"
 Check bot token and chat ID:
@@ -321,70 +412,10 @@ Check internet connectivity and region code:
 docker exec ott-hooks curl https://apis.justwatch.com/graphql
 ```
 
-## 🧪 Testing
-
-### Running Tests
-
-```bash
-# Install dev dependencies
-pip install -r requirements.txt
-
-# Run all tests
-pytest
-
-# Run with coverage report
-pytest --cov=src --cov-report=html
-
-# Run specific test file
-pytest tests/test_config.py -v
-
-# Run tests matching pattern
-pytest -k "telegram" -v
-```
-
-### Test Coverage
-
-Current test coverage: **37%** (43 tests passing)
-
-```
-Module                      Coverage
-----------------------------------
-src/clients/arr_client.py   100%  ✅
-src/clients/telegram.py      83%  ✅
-src/config.py                85%  ✅
-src/models.py               100%  ✅
-src/managers/radarr.py       90%  ✅
-src/managers/sonarr.py       90%  ✅
-```
-
-### Test Structure
-
-```
-tests/
-├── conftest.py           # Shared fixtures
-├── test_config.py        # Configuration tests
-├── test_telegram.py      # Telegram client tests
-├── test_arr_client.py    # *arr HTTP client tests
-├── test_justwatch.py     # JustWatch API tests
-├── test_models.py        # Data models tests
-├── test_managers.py      # Manager logic tests
-└── test_api.py           # API endpoint tests
-```
-
-### Writing New Tests
-
-```python
-def test_your_feature(mock_arr_client, mock_telegram):
-    """Test description"""
-    # Arrange
-    manager = RadarrManager(...)
-    
-    # Act
-    result = manager.some_method()
-    
-    # Assert
-    assert result == expected
-```
+### "Migration taking too long"
+- Expected: ~1 minute per 50-60 items (JustWatch rate limits)
+- Safe to interrupt with Ctrl+C and resume later
+- Already-tagged items are skipped on re-run
 
 ## 🐛 Troubleshooting
 

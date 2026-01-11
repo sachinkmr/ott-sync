@@ -4,6 +4,7 @@ FROM python:3.11.9-slim
 RUN apt-get update && apt-get install -y \
     git \
     curl \
+    wakeonlan \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
@@ -21,7 +22,7 @@ COPY --chown=ott:ott requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY --chown=ott:ott src/ ./src/
+COPY --chown=ott:ott ott/ ./ott/
 COPY --chown=ott:ott main.py ./
 
 # Switch to non-root user

@@ -43,7 +43,7 @@ from ott.cli.commands import app as cli_app, register_commands
 from ott.utils.reload import ConfigReloader
 
 # Global state for hot reload
-_managers = {}
+_managers = {}  # Stores radarr, sonarr, and telegram for hot reload
 _config_path = None
 
 
@@ -68,25 +68,78 @@ def reload_configuration():
         radarr_client = ArrClient(config.radarr_url, config.radarr_api_key)
         sonarr_client = ArrClient(config.sonarr_url, config.sonarr_api_key)
         
+        # Initialize anime detection if enabled
+        anime_detector = None
+        anime_config_dict = None
+        if config.anime_detection and config.anime_detection.enabled:
+            logger.info("🎌 Initializing anime detection...")
+            from ott.clients.tmdb import TMDBClient
+            from ott.clients.anilist import AniListClient
+            from ott.utils.anime_detector import AnimeDetector
+            
+            tmdb_client = TMDBClient(
+                api_key=config.anime_detection.tmdb_api_key,
+            rate_limit_calls=config.anime_detection.tmdb_rate_limit_calls,
+            rate_limit_period=config.anime_detection.tmdb_rate_limit_period
+        )
+        
+        anilist_client = AniListClient(
+            rate_limit_calls=config.anime_detection.anilist_rate_limit_calls,
+            rate_limit_period=config.anime_detection.anilist_rate_limit_period
+        )
+        
+        anime_detector = AnimeDetector(
+            tmdb_client=tmdb_client,
+            anilist_client=anilist_client,
+            require_anilist_match=config.anime_detection.require_anilist_match
+        )
+        
+        # Convert anime config to dict for manager
+        anime_config_dict = {
+            "detection": {
+                "require_anilist_match": config.anime_detection.require_anilist_match
+            },
+            "metadata": {
+                "auto_set_series_type": config.anime_detection.auto_set_series_type,
+                "auto_set_profile": config.anime_detection.auto_set_profile,
+                "profile_name": config.anime_detection.profile_name,
+                "skip_if_profile_contains_anime": config.anime_detection.skip_if_profile_contains_anime
+            },
+            "telegram": {
+                "notify_maybe": config.anime_detection.notify_maybe,
+                "admin_chat_id": ""
+            }
+        }
+        
+        logger.info("  ✓ Anime detection initialized")
+        
+        # Store telegram for route access (hot reloadable)
+        _managers['telegram'] = telegram
+        
         # Reinitialize managers
         _managers['radarr'] = RadarrManager(
             arr_client=radarr_client,
             justwatch_client=justwatch,
             telegram=telegram,
-            ott_providers=set(config.ott_providers)
+            ott_providers=set(config.ott_providers),
+            verification_delay_seconds=config.verification_delay_seconds
         )
         
         _managers['sonarr'] = SonarrManager(
             arr_client=sonarr_client,
             justwatch_client=justwatch,
             telegram=telegram,
-            ott_providers=set(config.ott_providers)
+            ott_providers=set(config.ott_providers),
+            verification_delay_seconds=config.verification_delay_seconds,
+            anime_detector=anime_detector,
+            anime_config=anime_config_dict
         )
         
         logger.info("✓ Configuration reloaded - new settings active for future requests")
         logger.info(f"  - OTT Providers: {len(config.ott_providers)}")
         logger.info(f"  - Telegram: {'enabled' if telegram.enabled else 'disabled'}")
         logger.info(f"  - Region: {config.region}")
+        logger.info(f"  - Anime Detection: {'enabled' if anime_detector else 'disabled'}")
         
     except Exception as e:
         logger.error(f"Configuration reload failed: {e}", exc_info=True)
@@ -99,12 +152,23 @@ def main():
     
     # Load configuration
     try:
-        config = Config.load_default()
-        # Determine which config path was used
-        for path in [Path("/config/config.json"), Path("/ssd/tools/docker/plex_addons/ott-sync/config.json")]:
+        # Try default paths and store which one was used
+        config_paths = [
+            Path("/config/config.json"),
+            Path("/ssd/tools/docker/plex_addons/ott-sync/config.json"),
+            Path("/ssd/tools/docker/arrs/ott-sync/config.json"),
+        ]
+        
+        _config_path = None
+        for path in config_paths:
             if path.exists():
                 _config_path = path
+                config = Config.load(path)
                 break
+        
+        if not _config_path:
+            logger.error(f"Config file not found in any of: {[str(p) for p in config_paths]}")
+            sys.exit(1)
     except Exception as e:
         logger.error(f"Failed to load configuration: {e}")
         sys.exit(1)
@@ -121,21 +185,83 @@ def main():
     radarr_client = ArrClient(config.radarr_url, config.radarr_api_key)
     sonarr_client = ArrClient(config.sonarr_url, config.sonarr_api_key)
     
+    # Initialize anime detection if enabled
+    anime_detector = None
+    anime_config_dict = None
+    if config.anime_detection and config.anime_detection.enabled:
+        logger.info("🎌 Initializing anime detection...")
+        from ott.clients.tmdb import TMDBClient
+        from ott.clients.anilist import AniListClient
+        from ott.utils.anime_detector import AnimeDetector
+        
+        tmdb_client = TMDBClient(
+            api_key=config.anime_detection.tmdb_api_key,
+            rate_limit_calls=config.anime_detection.tmdb_rate_limit_calls,
+            rate_limit_period=config.anime_detection.tmdb_rate_limit_period
+        )
+        
+        anilist_client = AniListClient(
+            rate_limit_calls=config.anime_detection.anilist_rate_limit_calls,
+            rate_limit_period=config.anime_detection.anilist_rate_limit_period
+        )
+        
+        anime_detector = AnimeDetector(
+            tmdb_client=tmdb_client,
+            anilist_client=anilist_client,
+            require_anilist_match=config.anime_detection.require_anilist_match
+        )
+        
+        # Convert anime config to dict for manager
+        anime_config_dict = {
+            "detection": {
+                "require_anilist_match": config.anime_detection.require_anilist_match
+            },
+            "metadata": {
+                "auto_set_series_type": config.anime_detection.auto_set_series_type,
+                "auto_set_profile": config.anime_detection.auto_set_profile,
+                "profile_name": config.anime_detection.profile_name,
+                "skip_if_profile_contains_anime": config.anime_detection.skip_if_profile_contains_anime
+            },
+            "telegram": {
+                "notify_maybe": config.anime_detection.notify_maybe,
+                "admin_chat_id": ""
+            }
+        }
+        
+        logger.info("  ✓ Anime detection initialized")
+    
     # Initialize managers with dependency injection
     logger.info("Initializing managers...")
+    
+    # Store telegram in _managers for hot reload access
+    _managers['telegram'] = telegram
+    
     _managers['radarr'] = RadarrManager(
         arr_client=radarr_client,
         justwatch_client=justwatch,
         telegram=telegram,
-        ott_providers=set(config.ott_providers)
+        ott_providers=set(config.ott_providers),
+        verification_delay_seconds=config.verification_delay_seconds
     )
     
     _managers['sonarr'] = SonarrManager(
         arr_client=sonarr_client,
         justwatch_client=justwatch,
         telegram=telegram,
-        ott_providers=set(config.ott_providers)
+        ott_providers=set(config.ott_providers),
+        verification_delay_seconds=config.verification_delay_seconds,
+        anime_detector=anime_detector,
+        anime_config=anime_config_dict
     )
+    
+    # Run anime migration if enabled
+    if anime_detector and config.anime_detection.auto_run_on_startup:
+        logger.info("🎌 Running anime migration on startup...")
+        try:
+            stats = _managers['sonarr'].migrate_all_anime()
+            logger.info(f"  ✓ Anime migration complete: {stats}")
+        except Exception as e:
+            logger.error(f"  ✗ Anime migration failed: {e}", exc_info=True)
     
     # Register API routes (use lambda to get current managers)
     logger.info("Registering API routes...")
@@ -146,7 +272,7 @@ def main():
     register_telegram_routes(
         lambda: _managers['radarr'],
         lambda: _managers['sonarr'],
-        telegram
+        lambda: _managers['telegram']
     )
     register_health_routes(
         lambda: _managers['radarr'],
