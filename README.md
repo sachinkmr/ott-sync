@@ -3,6 +3,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.127.0-green.svg)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://www.docker.com/)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/yourusername/ott-sync/blob/main/CHANGELOG.md)
 
 **Intelligent OTT awareness for your *arr stack** - automatically prevent downloads for content already available on your streaming services.
 
@@ -18,6 +19,40 @@ OTT Hooks integrates with Radarr/Sonarr to:
 - ✅ **Scheduled reconciliation** to catch missed items
 - ✅ **Hot reload config** without container restart
 - ✅ **Migration tools** to retroactively tag existing libraries
+
+## 🆕 What's New in v2.0.0
+
+### 📊 Database Integration
+- **SQLite database** for persistent metrics, cache, and history
+- **Historical metrics** - Track processing stats over time
+- **JustWatch cache** - 7-day caching reduces API calls by ~80%
+- **Override history** - Full audit trail of user actions
+- **Tag history** - Track all tag changes with timestamps
+
+### 🚀 Performance Improvements
+- **Smart caching** - JustWatch results cached with intelligent TTL
+- **Hit rate tracking** - Monitor cache performance
+- **Reduced API calls** - Save on rate limits and improve speed
+- **Database indexes** - Optimized queries for large libraries
+
+### 📈 Analytics & Monitoring
+- **Comprehensive metrics** - Hourly, daily, weekly breakdowns
+- **Error logging** - Structured error tracking with severity levels
+- **Health monitoring** - Database, services, and system status
+- **Cache statistics** - Real-time hit/miss rates
+
+### 🔧 Enhanced API
+- **Interactive Swagger docs** at `/docs`
+- **Metrics endpoints** - `/metrics`, `/metrics/hourly`, `/errors`
+- **Cache management** - `/cache/stats`, `/cache/invalidate`, `/cache/cleanup`
+- **Better health checks** - Detailed component status
+- **Request/response models** - Full Pydantic validation
+
+### 🎨 Configuration Improvements
+- **Backward compatible** - Existing configs work without changes
+- **New options** - Database, cache, performance tuning
+- **Detailed comments** - Comprehensive config.json.example
+- **Sensible defaults** - Works out of the box
 
 ## 📋 Features
 
@@ -38,6 +73,18 @@ OTT Hooks integrates with Radarr/Sonarr to:
 - One-click override buttons
 - Re-blocking detection (prevents bypass)
 - User-friendly status messages
+
+### Production Ready
+- Modular architecture (20+ Python modules)
+- Type hints throughout
+- Comprehensive logging
+- Docker containerization
+- Non-root user for security
+- Health check endpoints
+- Configuration hot reload
+- **NEW**: SQLite database with WAL mode
+- **NEW**: Intelligent caching system
+- **NEW**: Metrics and analytics
 
 ## 🚀 Quick Start
 

@@ -98,6 +98,68 @@ class Config:
         self.ott_providers: list[str] = config_dict["ott_providers"]
         
         # Telegram configuration
+        telegram_config = config_dict.get("telegram", {})
+        self.telegram = type('TelegramConfig', (), {
+            'enabled': telegram_config.get("enabled", True),
+            'bot_token': telegram_config.get("bot_token", ""),
+            'chat_id': telegram_config.get("chat_id", ""),
+            'admin_chat_id': telegram_config.get("admin_chat_id", ""),
+            'region': telegram_config.get("region", "India"),
+        })()
+        
+        # Region
+        self.region: str = config_dict.get("region", "IN")
+        
+        # Cron configuration
+        self.cron_initial_delay_seconds: int = config_dict.get("cron_initial_delay_seconds", 60)
+        self.cron_interval_hours: int = config_dict.get("cron_interval_hours", 24)
+        
+        # Verification delay
+        self.verification_delay_seconds: int = config_dict.get("verification_delay_seconds", 60)
+        
+        # Webhook events
+        self.webhook_events: list[str] = config_dict.get("webhook_events", ["MovieAdded", "SeriesAdded"])
+        
+        # JustWatch rate limiting
+        jw_rate_limit = config_dict.get("justwatch_rate_limit", {})
+        self.justwatch_rate_limit_calls: int = jw_rate_limit.get("max_calls", 60)
+        self.justwatch_rate_limit_period: int = jw_rate_limit.get("period_seconds", 60)
+        
+        # ========== v2.0.0 New Configuration Options (with backward compatibility) ==========
+        
+        # Database configuration
+        db_config = config_dict.get("database", {})
+        self.database_path: str = db_config.get("path", "/config/ott-hooks.db")
+        self.database_enable_wal: bool = db_config.get("enable_wal", True)
+        self.database_backup_enabled: bool = db_config.get("backup_enabled", False)
+        self.database_backup_interval_hours: int = db_config.get("backup_interval_hours", 24)
+        
+        # Cache configuration
+        cache_config = config_dict.get("cache", {})
+        self.cache_enabled: bool = cache_config.get("enabled", True)
+        self.cache_ttl_found_days: int = cache_config.get("ttl_found_days", 7)
+        self.cache_ttl_not_found_hours: int = cache_config.get("ttl_not_found_hours", 24)
+        self.cache_max_size_mb: int = cache_config.get("max_size_mb", 50)
+        
+        # Performance configuration
+        perf_config = config_dict.get("performance", {})
+        self.max_concurrent_webhooks: int = perf_config.get("max_concurrent_webhooks", 5)
+        self.max_concurrent_justwatch_calls: int = perf_config.get("max_concurrent_justwatch_calls", 10)
+        self.enable_async_processing: bool = perf_config.get("enable_async_processing", False)
+        
+        # Metrics configuration
+        metrics_config = config_dict.get("metrics", {})
+        self.metrics_retention_days: int = metrics_config.get("retention_days", 90)
+        
+        # Anime detection (existing, preserved)
+        anime_config = config_dict.get("anime_detection")
+        if anime_config:
+            self.anime_detection = AnimeDetectionConfig(anime_config)
+        else:
+            self.anime_detection = None
+        
+        # Store raw config for backward compatibility
+        self._raw_config = config_dict
         self.telegram: dict[str, Any] = config_dict.get("telegram", {})
         self.telegram_admin_chat_id: Optional[str] = self.telegram.get("admin_chat_id")
         

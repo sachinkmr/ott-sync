@@ -1,9 +1,16 @@
 {
+  "_comment_radarr": "Radarr configuration - URL and API key for movie management",
   "radarr_url": "http://your-radarr-server:7878",
   "radarr_api_key": "YOUR_RADARR_API_KEY_HERE",
+  
+  "_comment_sonarr": "Sonarr configuration - URL and API key for series management",
   "sonarr_url": "http://your-sonarr-server:8989",
   "sonarr_api_key": "YOUR_SONARR_API_KEY_HERE",
+  
+  "_comment_ott_providers": "List of OTT providers to check (case-sensitive, must match JustWatch provider names)",
   "ott_providers": ["Netflix", "Prime Video", "Disney Plus Hotstar"],
+  
+  "_comment_telegram": "Telegram bot configuration for notifications and interactive buttons",
   "telegram": {
     "enabled": true,
     "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
@@ -11,13 +18,105 @@
     "admin_chat_id": "",
     "region": "India"
   },
+  
+  "_comment_region": "JustWatch region code (IN, US, GB, etc.) - must match your location",
   "region": "IN",
+  
+  "_comment_cron": "Scheduled cleanup configuration",
   "cron_initial_delay_seconds": 60,
   "cron_interval_hours": 24,
+  
+  "_comment_verification": "Delay before verifying item wasn't grabbed (prevents race conditions)",
+  "verification_delay_seconds": 60,
+  
+  "_comment_webhook_events": "Webhook events to process (MovieAdded, SeriesAdded, Grab, etc.)",
+  "webhook_events": [
+    "MovieAdded",
+    "SeriesAdded"
+  ],
+  
+  "_comment_justwatch_rate_limit": "JustWatch API rate limiting to avoid throttling",
   "justwatch_rate_limit": {
     "max_calls": 60,
     "period_seconds": 60
   },
+  
+  "_comment_database": "SQLite database configuration (v2.0.0+)",
+  "database": {
+    "_comment": "Database will be created at /config/ott-hooks.db (in Docker volume)",
+    "path": "/config/ott-hooks.db",
+    "enable_wal": true,
+    "backup_enabled": false,
+    "backup_interval_hours": 24
+  },
+  
+  "_comment_cache": "JustWatch cache configuration for performance optimization (v2.0.0+)",
+  "cache": {
+    "_comment": "Caching reduces API calls and improves response time",
+    "enabled": true,
+    "ttl_found_days": 7,
+    "ttl_not_found_hours": 24,
+    "max_size_mb": 50
+  },
+  
+  "_comment_performance": "Performance tuning options (v2.0.0+)",
+  "performance": {
+    "_comment": "Adjust these based on your system resources",
+    "max_concurrent_webhooks": 5,
+    "max_concurrent_justwatch_calls": 10,
+    "enable_async_processing": false
+  },
+  
+  "_comment_metrics": "Metrics retention configuration (v2.0.0+)",
+  "metrics": {
+    "_comment": "Metrics older than this will be automatically deleted",
+    "retention_days": 90
+  },
+  
+  "_comment_anime_detection": "Anime detection system (optional feature)",
+  "anime_detection": {
+    "enabled": false,
+    "api": {
+      "_comment": "Get free TMDB API key from https://www.themoviedb.org/settings/api",
+      "tmdb_api_key": "",
+      "tmdb_rate_limit": {
+        "max_calls": 40,
+        "period_seconds": 10
+      },
+      "anilist_enabled": true,
+      "anilist_rate_limit": {
+        "max_calls": 90,
+        "period_seconds": 60
+      }
+    },
+    "detection": {
+      "require_anilist_match": false,
+      "process_all_anilist_results": true
+    },
+    "metadata": {
+      "auto_set_series_type": true,
+      "auto_set_profile": true,
+      "profile_name": "Anime",
+      "skip_if_profile_contains_anime": true
+    },
+    "tags": {
+      "checked": "anime-checked",
+      "detected": "anime-detected",
+      "maybe": "anime-maybe"
+    },
+    "telegram": {
+      "notify_maybe": true,
+      "notify_detected": false
+    },
+    "migration": {
+      "_comment": "immediate: run on startup, manual: use CLI, disabled: skip migration",
+      "mode": "immediate",
+      "auto_run_on_startup": true,
+      "parallel_processing": true
+    }
+  }
+}
+
   "anime_detection": {
     "enabled": false,
     "api": {

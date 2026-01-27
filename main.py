@@ -173,6 +173,45 @@ def main():
         logger.error(f"Failed to load configuration: {e}")
         sys.exit(1)
     
+    # ========== Initialize Database (v2.0.0) ==========
+    logger.info("📊 Initializing database...")
+    try:
+        from ott.db.client import initialize_database
+        db = initialize_database(
+            db_path=config.database_path,
+            enable_wal=config.database_enable_wal
+        )
+        logger.info(f"  ✓ Database initialized: {config.database_path}")
+        
+        # Run health check
+        health = db.health_check()
+        if health["status"] == "healthy":
+            logger.info(f"  ✓ Database healthy ({health['database']['size_mb']} MB)")
+        else:
+            logger.warning(f"  ⚠ Database health check: {health.get('error', 'Unknown issue')}")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}", exc_info=True)
+        logger.warning("  ⚠ Continuing without database - features will be limited")
+    
+    # ========== Initialize Cache (v2.0.0) ==========
+    _justwatch_cache = None
+    if config.cache_enabled:
+        logger.info("💾 Initializing JustWatch cache...")
+        try:
+            from ott.utils.cache import JustWatchCache
+            _justwatch_cache = JustWatchCache(
+                ttl_found_days=config.cache_ttl_found_days,
+                ttl_not_found_hours=config.cache_ttl_not_found_hours,
+                max_size_mb=config.cache_max_size_mb,
+            )
+            logger.info(f"  ✓ Cache enabled (TTL: {config.cache_ttl_found_days}d found, {config.cache_ttl_not_found_hours}h not found)")
+        except Exception as e:
+            logger.error(f"Failed to initialize cache: {e}", exc_info=True)
+            logger.warning("  ⚠ Continuing without cache - performance may be impacted")
+            _justwatch_cache = None
+    else:
+        logger.info("💾 Cache disabled by configuration")
+    
     # Initialize clients
     logger.info("Initializing clients...")
     telegram = TelegramNotifier(config.telegram)
@@ -278,6 +317,18 @@ def main():
         lambda: _managers['radarr'],
         lambda: _managers['sonarr']
     )
+    
+    # ========== Register v2.0.0 Routes ==========
+    # Register cache management routes (if cache is enabled)
+    if _justwatch_cache:
+        from ott.api.cache import register_cache_routes
+        register_cache_routes(lambda: _justwatch_cache)
+        logger.info("  ✓ Cache management routes registered")
+    
+    # Register metrics and analytics routes
+    from ott.api.metrics import register_metrics_routes
+    register_metrics_routes()
+    logger.info("  ✓ Metrics routes registered")
     
     # Register CLI commands
     logger.info("Registering CLI commands...")
