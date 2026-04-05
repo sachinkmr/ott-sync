@@ -1,5 +1,6 @@
 """Health and utility endpoints"""
 
+import asyncio
 import logging
 import time
 from typing import Callable
@@ -42,30 +43,30 @@ def register_health_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable):
         """
         try:
             from .. import __version__
-            
-            # Check database health
+
+            # Check database health (offloaded - SQLite PRAGMA + query is blocking)
             try:
                 db = get_db()
-                db_health = db.health_check()
+                db_health = await asyncio.to_thread(db.health_check)
             except Exception as e:
                 logger.error(f"[HEALTH] Database check failed: {e}")
                 db_health = {"status": "unhealthy", "error": str(e)}
-            
-            # Check service connectivity
+
+            # Check service connectivity (offloaded - requests.get is blocking HTTP)
             radarr_status = "unknown"
             sonarr_status = "unknown"
-            
+
             try:
                 radarr_mgr = get_radarr_mgr()
-                res = radarr_mgr.client.get("tag")
+                res = await asyncio.to_thread(radarr_mgr.client.get, "tag")
                 radarr_status = "healthy" if res and res.status_code == 200 else "unhealthy"
             except Exception as e:
                 logger.error(f"[HEALTH] Radarr check failed: {e}")
                 radarr_status = "unhealthy"
-            
+
             try:
                 sonarr_mgr = get_sonarr_mgr()
-                res = sonarr_mgr.client.get("tag")
+                res = await asyncio.to_thread(sonarr_mgr.client.get, "tag")
                 sonarr_status = "healthy" if res and res.status_code == 200 else "unhealthy"
             except Exception as e:
                 logger.error(f"[HEALTH] Sonarr check failed: {e}")
@@ -148,9 +149,11 @@ def register_health_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable):
         Useful for testing or manual reconciliation.
         """
         logger.info("[API] Manual cron trigger requested")
-        
-        radarr_metrics = get_radarr_mgr().cron_cleanup()
-        sonarr_metrics = get_sonarr_mgr().cron_cleanup()
+
+        # cron_cleanup walks every item in Radarr/Sonarr libraries plus
+        # JustWatch lookups - blocking and potentially slow.
+        radarr_metrics = await asyncio.to_thread(get_radarr_mgr().cron_cleanup)
+        sonarr_metrics = await asyncio.to_thread(get_sonarr_mgr().cron_cleanup)
         
         return {
             "ok": True,
