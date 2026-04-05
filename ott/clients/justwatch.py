@@ -77,40 +77,50 @@ class JustWatchClient:
                 year_matched_results = []
                 
                 for item in results:
-                    provider_names = [offer.package.name for offer in item.offers]
+                    # justwatch-python library returns objects whose shape
+                    # varies slightly by media type / endpoint; guard all
+                    # attribute access that isn't guaranteed.
+                    provider_names = [
+                        offer.package.name
+                        for offer in getattr(item, "offers", []) or []
+                        if getattr(offer, "package", None)
+                        and getattr(offer.package, "name", None)
+                    ]
                     logger.info(f"[JustWatch] Available on: {provider_names}")
-                    
+
                     # Check if this result matches our IDs
                     id_match = False
-                    if tmdb_id and hasattr(item, 'tmdb_id') and item.tmdb_id == tmdb_id:
+                    if tmdb_id and getattr(item, "tmdb_id", None) == tmdb_id:
                         id_match = True
-                    elif imdb_id and hasattr(item, 'imdb_id') and item.imdb_id == imdb_id:
+                    elif imdb_id and getattr(item, "imdb_id", None) == imdb_id:
                         id_match = True
-                    
+
                     # Categorize results by match quality
                     if id_match:
                         id_matched_results.append(item)
-                    elif not year or abs(item.release_year - year) <= 1:
-                        year_matched_results.append(item)
+                    else:
+                        item_year = getattr(item, "release_year", None)
+                        if not year or (item_year is not None and abs(item_year - year) <= 1):
+                            year_matched_results.append(item)
                 
+                def _offer_providers_in(item, allowed):
+                    return [
+                        offer.package.name
+                        for offer in getattr(item, "offers", []) or []
+                        if getattr(offer, "package", None)
+                        and getattr(offer.package, "name", None) in allowed
+                    ]
+
                 # Check ID-matched results first (best accuracy)
                 for item in id_matched_results:
-                    found = [
-                        offer.package.name
-                        for offer in item.offers
-                        if offer.package.name in allowed_providers
-                    ]
+                    found = _offer_providers_in(item, allowed_providers)
                     if found:
                         logger.info(f"[JustWatch] FOUND on {found} (ID match)")
                         return found
-                
+
                 # Fall back to year-matched results (metadata resilience)
                 for item in year_matched_results:
-                    found = [
-                        offer.package.name
-                        for offer in item.offers
-                        if offer.package.name in allowed_providers
-                    ]
+                    found = _offer_providers_in(item, allowed_providers)
                     if found:
                         logger.info(f"[JustWatch] FOUND on {found} (year match, ID not available)")
                         return found
