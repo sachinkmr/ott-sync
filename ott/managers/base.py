@@ -212,8 +212,10 @@ class OTTBaseManager(ABC):
             if tag_label.startswith("ott-") and tag_label not in [
                 "ott-skipped", "ott-processed", "ott-override"
             ]:
-                # Remove if not in current providers OR not in configured providers
-                if tag_label not in current_provider_tags or tag_label not in configured_provider_tags:
+                # Remove only orphaned tags: not in current availability AND not in our
+                # configured providers. A tag that's either currently available OR tracked
+                # in config represents real state we want to keep.
+                if tag_label not in current_provider_tags and tag_label not in configured_provider_tags:
                     tags_to_remove.append((tag_id, tag_label))
         
         if tags_to_remove:
