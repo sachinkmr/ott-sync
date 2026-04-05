@@ -169,7 +169,10 @@ class WebhookLogModel(Base):
     __table_args__ = (
         Index('idx_webhook_timestamp', 'timestamp'),
         Index('idx_webhook_service', 'service', 'event_type'),
-        Index('idx_webhook_payload', 'payload_hash'),
+        # Composite index for the dedup query (WebhookRepository.check_duplicate)
+        # which filters on (payload_hash, timestamp >= cutoff). SQLite will also
+        # use this for payload_hash-only lookups via the leading column.
+        Index('idx_webhook_dedup', 'payload_hash', 'timestamp'),
     )
 
 
