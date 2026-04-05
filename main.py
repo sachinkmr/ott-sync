@@ -118,34 +118,38 @@ def reload_configuration():
             
             logger.info("  ✓ Anime detection initialized")
         
-        # Store telegram for route access (hot reloadable)
-        _managers['telegram'] = telegram
-        
-        # Reinitialize managers with auto_download and rating clients
-        _managers['radarr'] = RadarrManager(
-            arr_client=radarr_client,
-            justwatch_client=justwatch,
-            telegram=telegram,
-            ott_providers=set(config.ott_providers),
-            verification_delay_seconds=config.verification_delay_seconds,
-            auto_download=config.auto_download,
-            tmdb_client=tmdb_client,
-            anilist_client=anilist_client,
-        )
-        
-        _managers['sonarr'] = SonarrManager(
-            arr_client=sonarr_client,
-            justwatch_client=justwatch,
-            telegram=telegram,
-            ott_providers=set(config.ott_providers),
-            verification_delay_seconds=config.verification_delay_seconds,
-            auto_download=config.auto_download,
-            tmdb_client=tmdb_client,
-            anilist_client=anilist_client,
-            anime_detector=anime_detector,
-            anime_config=anime_config_dict
-        )
-        
+        # Build the new manager set as a local dict, then swap _managers
+        # atomically. In-flight handlers that already dereferenced _managers
+        # keep using the old instances; subsequent lookups see the new set.
+        # The assignment `_managers = new_managers` is a single bytecode op,
+        # so there is no observable half-swapped state.
+        new_managers = {
+            'telegram': telegram,
+            'radarr': RadarrManager(
+                arr_client=radarr_client,
+                justwatch_client=justwatch,
+                telegram=telegram,
+                ott_providers=set(config.ott_providers),
+                verification_delay_seconds=config.verification_delay_seconds,
+                auto_download=config.auto_download,
+                tmdb_client=tmdb_client,
+                anilist_client=anilist_client,
+            ),
+            'sonarr': SonarrManager(
+                arr_client=sonarr_client,
+                justwatch_client=justwatch,
+                telegram=telegram,
+                ott_providers=set(config.ott_providers),
+                verification_delay_seconds=config.verification_delay_seconds,
+                auto_download=config.auto_download,
+                tmdb_client=tmdb_client,
+                anilist_client=anilist_client,
+                anime_detector=anime_detector,
+                anime_config=anime_config_dict,
+            ),
+        }
+        _managers = new_managers
+
         logger.info("✓ Configuration reloaded - new settings active for future requests")
         logger.info(f"  - OTT Providers: {len(config.ott_providers)}")
         logger.info(f"  - Telegram: {'enabled' if telegram.enabled else 'disabled'}")
