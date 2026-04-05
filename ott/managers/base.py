@@ -536,6 +536,18 @@ class OTTBaseManager(ABC):
             Number of queue records successfully deleted.
         """
         id_field = f"{self.item_type()}Id"  # "movieId" or "seriesId"
+
+        # Fire CancelPendingDownloads FIRST and unconditionally: an in-flight
+        # search command may not yet have produced a queue record, and we want
+        # *arr to release any reserved slot regardless of current queue state.
+        try:
+            self.client.post("command", json={
+                "name": "CancelPendingDownloads",
+                f"{self.item_type()}Ids": [item_id],
+            })
+        except Exception as e:
+            logger.warning(f"[QUEUE] CancelPendingDownloads failed for id={item_id}: {e}")
+
         try:
             records = self.client.get_queue()
         except Exception as e:
@@ -545,17 +557,6 @@ class OTTBaseManager(ABC):
         matching_ids = [r["id"] for r in records if r.get(id_field) == item_id]
         if not matching_ids:
             return 0
-
-        # Also fire CancelPendingDownloads command so *arr releases any reserved
-        # slot - the queue DELETE removes the record but the search/grab command
-        # may still be in flight.
-        try:
-            self.client.post("command", json={
-                "name": "CancelPendingDownloads",
-                f"{self.item_type()}Ids": [item_id],
-            })
-        except Exception as e:
-            logger.warning(f"[QUEUE] CancelPendingDownloads failed for id={item_id}: {e}")
 
         cancelled = 0
         for queue_id in matching_ids:

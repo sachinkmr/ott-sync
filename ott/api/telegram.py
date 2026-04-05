@@ -50,73 +50,76 @@ def register_telegram_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable,
             series_id = parsed.item_id
 
             mgr = get_sonarr_mgr()
-            
-            # Fetch series data
-            res = mgr.client.get(f"series/{series_id}")
-            if not res:
-                logger.error(f"[TG-ANIME] Failed to fetch series {series_id}")
-                telegram.send("❌ Series not found")
-                return {"ok": True}
-            
-            series_data = res.json()
-            title = series_data.get("title", "Unknown")
-            tags = set(series_data.get("tags", []))
-            
-            if action == "confirm":
-                # User confirmed it's anime
-                logger.info(f"[TG-ANIME] {user} confirmed anime: {title} (ID: {series_id})")
-                
-                # Remove maybe tag, add detected tag
-                tags.discard(mgr.anime_maybe_tag)
-                tags.add(mgr.anime_detected_tag)
-                tags.add(mgr.anime_checked_tag)
-                
-                series_data["tags"] = list(tags)
-                
-                # Update series
-                update_res = mgr.client.put(f"series/{series_id}", json=series_data)
-                if not update_res:
-                    telegram.send(f"❌ Failed to update {title}")
+
+            # Serialize against concurrent webhook flow for the same series
+            # (same race class that §6.2 fixed for override/approve callbacks).
+            with mgr._get_item_lock(series_id):
+                # Fetch series data
+                res = mgr.client.get(f"series/{series_id}")
+                if not res:
+                    logger.error(f"[TG-ANIME] Failed to fetch series {series_id}")
+                    telegram.send("❌ Series not found")
                     return {"ok": True}
-                
-                # Apply anime metadata
-                success = mgr.set_anime_metadata(series_id, series_data, force=True)
-                
-                if success:
+
+                series_data = res.json()
+                title = series_data.get("title", "Unknown")
+                tags = set(series_data.get("tags", []))
+
+                if action == "confirm":
+                    # User confirmed it's anime
+                    logger.info(f"[TG-ANIME] {user} confirmed anime: {title} (ID: {series_id})")
+
+                    # Remove maybe tag, add detected tag
+                    tags.discard(mgr.anime_maybe_tag)
+                    tags.add(mgr.anime_detected_tag)
+                    tags.add(mgr.anime_checked_tag)
+
+                    series_data["tags"] = list(tags)
+
+                    # Update series
+                    update_res = mgr.client.put(f"series/{series_id}", json=series_data)
+                    if not update_res:
+                        telegram.send(f"❌ Failed to update {title}")
+                        return {"ok": True}
+
+                    # Apply anime metadata (inside lock - it also mutates the series)
+                    success = mgr.set_anime_metadata(series_id, series_data, force=True)
+
+                    if success:
+                        telegram.send(
+                            f"✅ *Anime Confirmed*\n\n"
+                            f"📺 *{title}*\n\n"
+                            f"Series type set to anime and profile updated by {user}."
+                        )
+                    else:
+                        telegram.send(
+                            f"⚠️ *Anime Confirmed (Partial)*\n\n"
+                            f"📺 *{title}*\n\n"
+                            f"Tagged as anime but metadata update failed."
+                        )
+
+                elif action == "reject":
+                    # User rejected anime classification
+                    logger.info(f"[TG-ANIME] {user} rejected anime: {title} (ID: {series_id})")
+
+                    # Remove anime tags
+                    tags.discard(mgr.anime_maybe_tag)
+                    tags.discard(mgr.anime_detected_tag)
+                    tags.add(mgr.anime_checked_tag)  # Keep checked tag to prevent re-detection
+
+                    series_data["tags"] = list(tags)
+
+                    update_res = mgr.client.put(f"series/{series_id}", json=series_data)
+                    if not update_res:
+                        telegram.send(f"❌ Failed to update {title}")
+                        return {"ok": True}
+
                     telegram.send(
-                        f"✅ *Anime Confirmed*\n\n"
+                        f"❌ *Not Anime*\n\n"
                         f"📺 *{title}*\n\n"
-                        f"Series type set to anime and profile updated by {user}."
+                        f"Marked as not anime by {user}. Series will keep current settings."
                     )
-                else:
-                    telegram.send(
-                        f"⚠️ *Anime Confirmed (Partial)*\n\n"
-                        f"📺 *{title}*\n\n"
-                        f"Tagged as anime but metadata update failed."
-                    )
-            
-            elif action == "reject":
-                # User rejected anime classification
-                logger.info(f"[TG-ANIME] {user} rejected anime: {title} (ID: {series_id})")
-                
-                # Remove anime tags
-                tags.discard(mgr.anime_maybe_tag)
-                tags.discard(mgr.anime_detected_tag)
-                tags.add(mgr.anime_checked_tag)  # Keep checked tag to prevent re-detection
-                
-                series_data["tags"] = list(tags)
-                
-                update_res = mgr.client.put(f"series/{series_id}", json=series_data)
-                if not update_res:
-                    telegram.send(f"❌ Failed to update {title}")
-                    return {"ok": True}
-                
-                telegram.send(
-                    f"❌ *Not Anime*\n\n"
-                    f"📺 *{title}*\n\n"
-                    f"Marked as not anime by {user}. Series will keep current settings."
-                )
-            
+
             return {"ok": True}
 
         # ─────────────────────────────────────────────
