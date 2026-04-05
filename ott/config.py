@@ -173,24 +173,22 @@ class Config:
     @classmethod
     def load(cls, path: Path) -> "Config":
         """Load and validate configuration from JSON file
-        
+
         Args:
-            path: Path to configuration JSON file
-            
+            path: Path to configuration JSON file (caller is responsible for
+                  path discovery/fallbacks; this method trusts the path given)
+
         Returns:
             Config instance
-            
+
         Raises:
             FileNotFoundError: If config file doesn't exist
             json.JSONDecodeError: If config file is invalid JSON
             KeyError: If required config keys are missing
         """
         if not path.exists():
-            path = Path("/ssd/tools/docker/arrs/ott-sync/config.json")
-       
-        if not path.exists():
             raise FileNotFoundError(f"Config file not found: {path}")
-        
+
         logger.info(f"Loading config from {path}")
         
         with path.open("r", encoding="utf-8") as f:

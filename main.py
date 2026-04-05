@@ -7,6 +7,7 @@ Supports hot reload via SIGHUP signal or config file changes.
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -163,22 +164,31 @@ def main():
     
     # Load configuration
     try:
-        # Try default paths and store which one was used
-        config_paths = [
-            Path("/config/config.json"),
-            Path("/ssd/tools/docker/plex_addons/ott-sync/config.json"),
-            Path("/ssd/tools/docker/arrs/ott-sync/config.json"),
-        ]
-        
+        # OTT_SYNC_CONFIG_PATH takes precedence if set. Otherwise try default
+        # paths in order (Docker container first, then known host layouts).
+        env_path = os.environ.get("OTT_SYNC_CONFIG_PATH")
+        if env_path:
+            config_paths = [Path(env_path)]
+        else:
+            config_paths = [
+                Path("/config/config.json"),
+                Path("/ssd/tools/docker/arrs/ott-sync/config.json"),
+                Path("/ssd/tools/docker/plex_addons/ott-sync/config.json"),
+            ]
+
         _config_path = None
         for path in config_paths:
             if path.exists():
                 _config_path = path
                 config = Config.load(path)
                 break
-        
+
         if not _config_path:
-            logger.error(f"Config file not found in any of: {[str(p) for p in config_paths]}")
+            logger.error(
+                f"Config file not found in any of: {[str(p) for p in config_paths]}. "
+                "Set OTT_SYNC_CONFIG_PATH env var to an explicit path if your "
+                "config lives elsewhere."
+            )
             sys.exit(1)
     except Exception as e:
         logger.error(f"Failed to load configuration: {e}")
