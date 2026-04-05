@@ -7,7 +7,7 @@ python_functions = ["test_*"]
 addopts = [
     "-v",
     "--strict-markers",
-    "--cov=src",
+    "--cov=ott",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
@@ -19,7 +19,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["src"]
+source = ["ott"]
 omit = [
     "*/tests/*",
     "*/__pycache__/*",

@@ -231,21 +231,30 @@ Improves resilience and observability. Not urgent but important.
 
 ## Phase 4 — Test Coverage
 
-Currently **~40% of the codebase has zero test coverage**. Critical paths must be protected before shipping further changes.
+Partially shipped (2026-04-05). Baseline fixed (16→0 broken tests), new code
+from Phases 1-3 covered. Remaining modules can land incrementally.
 
-### Missing test files (create):
-- `tests/test_database.py` — init, schema creation, WAL mode, repository CRUD, cleanup queries
-- `tests/test_cache.py` — hit/miss, TTL expiry, eviction, invalidation endpoints
-- `tests/test_webhooks.py` — idempotency, signature verification, error paths
-- `tests/test_anime_detector.py` — signal scoring, edge cases (conflicting signals, missing data)
-- `tests/test_cli_commands.py` — command registration, argument parsing, mocked manager calls
-- `tests/test_utils.py` — rate_limiter, reload, timestamp_cache
+### Shipped (commits d2655af + 1e829e1)
+- `tests/test_managers.py` — rewrote with URL-pattern mock helper; added override-tag short-circuit test.
+- `tests/test_api.py` — rewrote with 27 new tests for `parse_callback_action`, `_is_local_address`, `_require_local_client`; preserved OpenAPI schema tests.
+- `tests/test_justwatch.py` — switched to SimpleNamespace object mocks matching the simple-justwatch-python-api shape.
+- `tests/test_rate_limiter.py` — 10 tests covering §3.10 (acquire, reset, wake, execute vs execute_raising).
+- `tests/test_timestamp_cache.py` — 13 tests covering §2.9 (UTC-aware, legacy naive backward-compat, persistence, recheck threshold).
+- `tests/test_webhook_repo.py` — 7 tests against a real SQLite DB covering §2.3 (dedup, log_webhook, window math).
+- `tests/test_arr_client_retry.py` — 11 tests covering §3.1 (retry codes, terminal codes, request exceptions, `blocklist=false` guard).
+- `tests/test_config_validation.py` — 16 tests covering §3.3 (URLs, API keys, providers, numerics, conditional backup interval).
+- `sqlalchemy` installed in `.venv` (was missing, blocking all db-layer imports).
 
-### Existing test gaps (expand):
-- `tests/test_config.py` — invalid JSON, missing required keys, validation errors
-- `tests/test_api.py` — async endpoint behavior under concurrent load, error-response shape
+Suite: **143 passed, 0 failed** (was 54/16).
 
-Target: **>70% line coverage** on `ott/db/`, `ott/api/`, `ott/managers/`, `ott/utils/`.
+### Still missing (follow-up batches)
+- `tests/test_database.py` — init, schema creation, WAL mode, full CRUD across all repositories (only WebhookRepository covered so far).
+- `tests/test_cache.py` — JustWatchCache hit/miss, TTL expiry, eviction, invalidation endpoints.
+- `tests/test_webhooks.py` — full route-level webhook tests (dedup via HTTP, error paths, response shape integration).
+- `tests/test_anime_detector.py` — signal scoring, edge cases (conflicting signals, missing data).
+- `tests/test_cli_commands.py` — command registration, argument parsing, mocked manager calls.
+- `tests/test_reload.py` — ConfigReloader file-watching behavior.
+- Coverage measurement — `pytest --cov` currently produces "no data collected" warnings due to config (`source = src` in pyproject.toml points at a nonexistent directory; should be `ott`). Fix before targeting >70%.
 
 ---
 
