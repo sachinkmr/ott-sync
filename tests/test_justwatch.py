@@ -1,134 +1,140 @@
 """Tests for JustWatch OTT provider lookup client"""
 
-from unittest.mock import Mock, patch
-
-import pytest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from ott.clients.justwatch import JustWatchClient
 
 
+def _offer(provider_name: str) -> SimpleNamespace:
+    """Build a simple-justwatch-style offer object with offer.package.name."""
+    return SimpleNamespace(package=SimpleNamespace(name=provider_name))
+
+
+def _item(
+    title: str = "Sample",
+    release_year: int | None = 2020,
+    offers: list | None = None,
+    tmdb_id: int | None = None,
+    imdb_id: str | None = None,
+) -> SimpleNamespace:
+    """Build a simple-justwatch-style result object."""
+    ns = SimpleNamespace(title=title, offers=offers or [])
+    if release_year is not None:
+        ns.release_year = release_year
+    if tmdb_id is not None:
+        ns.tmdb_id = tmdb_id
+    if imdb_id is not None:
+        ns.imdb_id = imdb_id
+    return ns
+
+
 def test_justwatch_initialization():
-    """Test JustWatch client initialization"""
+    """JustWatch client initialization"""
     client = JustWatchClient(region="IN", language="en", max_results=5)
-    
     assert client.region == "IN"
     assert client.language == "en"
     assert client.max_results == 5
 
 
 def test_justwatch_default_values():
-    """Test JustWatch client default values"""
+    """JustWatch client default values"""
     client = JustWatchClient()
-    
     assert client.region == "IN"
     assert client.language == "en"
     assert client.max_results == 5
 
 
-@patch('ott.clients.justwatch.search')
+@patch("ott.clients.justwatch.search")
 def test_get_providers_found_on_ott(mock_search):
-    """Test finding content on allowed OTT provider"""
-    # Mock JustWatch search results
+    """Item available on one allowed provider → returns that provider."""
     mock_search.return_value = [
-        {
-            "title": "Stranger Things",
-            "original_release_year": 2016,
-            "offers": [
-                {"monetization_type": "flatrate", "provider_id": 8},  # Netflix
-            ]
-        }
+        _item("Stranger Things", 2016, offers=[_offer("Netflix")]),
     ]
-    
     client = JustWatchClient(region="IN")
     providers = client.get_providers("Stranger Things", 2016, {"Netflix"})
-    
     assert providers == ["Netflix"]
     assert mock_search.called
 
 
-@patch('ott.clients.justwatch.search')
+@patch("ott.clients.justwatch.search")
 def test_get_providers_not_found(mock_search):
-    """Test content not on any allowed providers"""
+    """Item only on unsupported providers → empty list."""
     mock_search.return_value = [
-        {
-            "title": "Obscure Movie",
-            "original_release_year": 2020,
-            "offers": [
-                {"monetization_type": "rent", "provider_id": 2},  # iTunes (not in allowed)
-            ]
-        }
+        _item("Obscure Movie", 2020, offers=[_offer("Apple TV+")]),
     ]
-    
     client = JustWatchClient(region="IN")
     providers = client.get_providers("Obscure Movie", 2020, {"Netflix", "Prime Video"})
-    
     assert providers == []
 
 
-@patch('ott.clients.justwatch.search')
+@patch("ott.clients.justwatch.search")
 def test_get_providers_multiple_providers(mock_search):
-    """Test content available on multiple OTT providers"""
+    """All matching providers are returned."""
     mock_search.return_value = [
-        {
-            "title": "Popular Show",
-            "original_release_year": 2021,
-            "offers": [
-                {"monetization_type": "flatrate", "provider_id": 8},   # Netflix
-                {"monetization_type": "flatrate", "provider_id": 119}, # Prime Video
-            ]
-        }
+        _item(
+            "Popular Show", 2021,
+            offers=[_offer("Netflix"), _offer("Prime Video")],
+        ),
     ]
-    
     client = JustWatchClient(region="IN")
     providers = client.get_providers(
-        "Popular Show", 
-        2021, 
-        {"Netflix", "Prime Video", "Disney Plus Hotstar"}
+        "Popular Show", 2021, {"Netflix", "Prime Video", "Disney Plus Hotstar"},
     )
-    
-    # Should return all matching providers
-    assert "Netflix" in providers
-    assert "Prime Video" in providers
-    assert len(providers) == 2
+    assert set(providers) == {"Netflix", "Prime Video"}
 
 
-@patch('ott.clients.justwatch.search')
+@patch("ott.clients.justwatch.search")
 def test_get_providers_wrong_year_filtered(mock_search):
-    """Test year filtering works correctly"""
+    """Year mismatch >1 year filters the result out."""
     mock_search.return_value = [
-        {
-            "title": "Test Movie",
-            "original_release_year": 2020,  # Different year
-            "offers": [
-                {"monetization_type": "flatrate", "provider_id": 8},
-            ]
-        }
+        _item("Test Movie", 2015, offers=[_offer("Netflix")]),
     ]
-    
     client = JustWatchClient(region="IN")
     providers = client.get_providers("Test Movie", 2021, {"Netflix"})
-    
-    # Should not match due to year mismatch
     assert providers == []
 
 
-@patch('ott.clients.justwatch.search')
+@patch("ott.clients.justwatch.search")
 def test_get_providers_no_year(mock_search):
-    """Test search without year parameter"""
+    """None year bypasses year filter."""
     mock_search.return_value = [
-        {
-            "title": "Test Movie",
-            "offers": [
-                {"monetization_type": "flatrate", "provider_id": 8},
-            ]
-        }
+        _item("Test Movie", release_year=None, offers=[_offer("Netflix")]),
     ]
-    
     client = JustWatchClient(region="IN")
     providers = client.get_providers("Test Movie", None, {"Netflix"})
-    
-    # Should match without year check
     assert "Netflix" in providers
+
+
+@patch("ott.clients.justwatch.search")
+def test_get_providers_tmdb_id_match_overrides_year(mock_search):
+    """tmdb_id match accepts the result even when year would exclude it."""
+    mock_search.return_value = [
+        _item(
+            "Stranger Things", release_year=2010,  # wrong year
+            offers=[_offer("Netflix")], tmdb_id=66732,
+        ),
+    ]
+    client = JustWatchClient(region="IN")
+    providers = client.get_providers(
+        "Stranger Things", 2016, {"Netflix"}, tmdb_id=66732,
+    )
+    assert providers == ["Netflix"]
+
+
+@patch("ott.clients.justwatch.search")
+def test_get_providers_skips_missing_package(mock_search):
+    """Offers without package.name are ignored, not crashed on."""
+    broken_offer = SimpleNamespace(package=None)
+    mock_search.return_value = [
+        _item(
+            "Movie", 2020,
+            offers=[broken_offer, _offer("Netflix")],
+        ),
+    ]
+    client = JustWatchClient(region="IN")
+    providers = client.get_providers("Movie", 2020, {"Netflix"})
+    assert providers == ["Netflix"]
 
 
 @patch('ott.clients.justwatch.search')
