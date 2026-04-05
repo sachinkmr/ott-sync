@@ -150,6 +150,13 @@ services:
 
 ### 3. Configure Webhooks
 
+**Prerequisite:** OTT enforcement, manual-approval mode, and queue cancellation
+ALL depend on *arr webhook delivery. Nothing happens until these are wired.
+`On Grab` is required for the Grab-event short-circuits and (for Sonarr)
+for per-episode visibility into what's being grabbed. Without it, ott-sync
+only sees `MovieAdded` / `SeriesAdded`, and grabs slip through between the
+Add event and the cron sweep.
+
 #### Radarr
 1. Settings → Connect → Add Webhook
 2. Name: `OTT Hooks - Radarr`
