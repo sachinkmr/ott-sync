@@ -346,7 +346,9 @@ def main():
     )
     register_health_routes(
         lambda: _managers['radarr'],
-        lambda: _managers['sonarr']
+        lambda: _managers['sonarr'],
+        wakeup_mac=config.wakeup_mac_address,
+        wakeup_broadcast=config.wakeup_broadcast_address,
     )
     
     # ========== Register v2.0.0 Routes ==========

@@ -15,12 +15,20 @@ logger = logging.getLogger("ott-hooks")
 _startup_time = time.time()
 
 
-def register_health_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable):
+def register_health_routes(
+    get_radarr_mgr: Callable,
+    get_sonarr_mgr: Callable,
+    wakeup_mac: str = "",
+    wakeup_broadcast: str = "",
+):
     """Register health check and utility endpoints
-    
+
     Args:
         get_radarr_mgr: Callable that returns current RadarrManager instance
         get_sonarr_mgr: Callable that returns current SonarrManager instance
+        wakeup_mac: MAC address for the /wakeup Wake-on-LAN endpoint. Empty
+            disables the endpoint (returns 400).
+        wakeup_broadcast: Broadcast address for the /wakeup Wake-on-LAN endpoint.
     """
     
     @app.get(
@@ -111,29 +119,41 @@ def register_health_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable):
     @app.get(
         "/wakeup",
         summary="Wake on LAN",
-        description="Send magic packet to wake Beast PC",
+        description="Send a Wake-on-LAN magic packet to the configured host",
         tags=["Utilities"],
     )
     async def wakeup():
-        """Run the script alias wake_beast"""
-        import subprocess
-        try:            
-            MAC = "d8:5e:d3:89:7e:ae"
-            BROADCAST = "192.168.1.255"
+        """Send a WoL magic packet to the configured target.
 
-            cmd = ["wakeonlan", "-i", BROADCAST, MAC]
-            logger.info("⚡ Waking Beast PC...")
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+        Requires wakeup.mac_address and wakeup.broadcast_address set in
+        config.json. Disabled (returns 400) when either is missing.
+        """
+        if not wakeup_mac or not wakeup_broadcast:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Wake-on-LAN endpoint not configured. Set wakeup.mac_address "
+                    "and wakeup.broadcast_address in config.json."
+                ),
+            )
+
+        import subprocess
+        try:
+            cmd = ["wakeonlan", "-i", wakeup_broadcast, wakeup_mac]
+            logger.info(f"⚡ Sending WoL packet to {wakeup_mac} via {wakeup_broadcast}")
+            await asyncio.to_thread(
+                subprocess.run, cmd, check=True, capture_output=True, text=True
+            )
             logger.info("✅ Magic packet sent")
             return {"status": "ok", "message": "Magic packet sent successfully"}
         except FileNotFoundError:
             logger.error("wakeonlan command not found - install wakeonlan package")
             return {
-                "status": "error", 
-                "message": "wakeonlan command not found. Install with: apt-get install wakeonlan"
+                "status": "error",
+                "message": "wakeonlan command not found. Install with: apt-get install wakeonlan",
             }
         except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to send wake-on-LAN packet: {e.stderr}")
+            logger.error(f"Failed to send WoL packet: {e.stderr}")
             return {"status": "error", "message": f"Failed to send packet: {e.stderr}"}
     
     @app.get(

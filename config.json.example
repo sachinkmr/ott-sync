@@ -31,6 +31,12 @@
   
   "_comment_auto_download": "Download mode: true = automatic (current behavior), false = manual approval required for ALL items",
   "auto_download": false,
+
+  "_comment_wakeup": "Optional /wakeup endpoint target (Wake-on-LAN). Leave both empty to disable.",
+  "wakeup": {
+    "mac_address": "",
+    "broadcast_address": ""
+  },
   
   "_comment_webhook_events": "Webhook events to process (MovieAdded, SeriesAdded, Grab, etc.)",
   "webhook_events": [

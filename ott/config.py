@@ -155,6 +155,12 @@ class Config:
         # Auto download mode (True = automatic, False = manual approval required)
         self.auto_download: bool = config_dict.get("auto_download", False)
 
+        # Optional Wake-on-LAN target for the /wakeup utility endpoint.
+        # Both fields empty disables the endpoint (returns 400).
+        wakeup_cfg = config_dict.get("wakeup", {}) or {}
+        self.wakeup_mac_address: str = wakeup_cfg.get("mac_address", "")
+        self.wakeup_broadcast_address: str = wakeup_cfg.get("broadcast_address", "")
+
         # Store raw config for backward compatibility
         self._raw_config = config_dict
     
