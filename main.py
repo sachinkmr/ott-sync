@@ -111,7 +111,7 @@ def reload_configuration():
                 },
                 "telegram": {
                     "notify_maybe": config.anime_detection.notify_maybe,
-                    "admin_chat_id": ""
+                    "admin_chat_id": config.telegram.get("admin_chat_id", ""),
                 }
             }
             
@@ -274,7 +274,7 @@ def main():
             },
             "telegram": {
                 "notify_maybe": config.anime_detection.notify_maybe,
-                "admin_chat_id": ""
+                "admin_chat_id": config.telegram.get("admin_chat_id", ""),
             }
         }
         
