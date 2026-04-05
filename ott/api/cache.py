@@ -1,6 +1,7 @@
 """Cache management API endpoints"""
 
 import logging
+from collections.abc import Callable
 from typing import Optional
 from fastapi import Request, HTTPException
 from pydantic import BaseModel
@@ -14,8 +15,31 @@ logger = logging.getLogger("ott-hooks")
 # Global cache instance (set in main.py)
 _cache: Optional[JustWatchCache] = None
 
+_LOCALHOST_IPS = {"127.0.0.1", "localhost", "::1"}
+_LOCAL_PREFIXES = ("192.168.", "10.", "172.")
 
-def register_cache_routes(get_cache: callable):
+
+def _require_local_client(request: Request, action: str) -> str:
+    """Reject non-local callers. Returns the caller's IP for logging.
+
+    request.client can be None behind some proxies and in test clients -
+    treat that as 'not local' and deny rather than crashing on an
+    AttributeError. Raises HTTPException(403) when the caller isn't local.
+    """
+    client_host = request.client.host if request.client else None
+    if (
+        client_host in _LOCALHOST_IPS
+        or (client_host and client_host.startswith(_LOCAL_PREFIXES))
+    ):
+        return client_host
+    logger.warning(f"[CACHE] {action} blocked from {client_host!r}")
+    raise HTTPException(
+        status_code=403,
+        detail=f"{action} is restricted to localhost and local network only",
+    )
+
+
+def register_cache_routes(get_cache: Callable[[], JustWatchCache]):
     """Register cache management endpoints
     
     Args:
@@ -90,18 +114,8 @@ def register_cache_routes(get_cache: callable):
         curl -X POST "http://localhost:9123/cache/invalidate"
         ```
         """
-        # Security check - only allow from localhost and local network
-        client_ip = request.client.host
-        allowed_ips = ["127.0.0.1", "localhost", "::1"]
-        is_local_network = client_ip.startswith("192.168.") or client_ip.startswith("10.") or client_ip.startswith("172.")
-        
-        if client_ip not in allowed_ips and not is_local_network:
-            logger.warning(f"[CACHE] Cache invalidation blocked from {client_ip}")
-            raise HTTPException(
-                status_code=403,
-                detail="Cache invalidation is restricted to localhost and local network only"
-            )
-        
+        client_ip = _require_local_client(request, "Cache invalidation")
+
         try:
             cache = get_cache()
             deleted = cache.invalidate(tmdb_id=tmdb_id, title=title, year=year)
@@ -136,17 +150,8 @@ def register_cache_routes(get_cache: callable):
         curl -X POST "http://localhost:9123/cache/cleanup"
         ```
         """
-        # Security check
-        client_ip = request.client.host
-        allowed_ips = ["127.0.0.1", "localhost", "::1"]
-        is_local_network = client_ip.startswith("192.168.") or client_ip.startswith("10.") or client_ip.startswith("172.")
-        
-        if client_ip not in allowed_ips and not is_local_network:
-            raise HTTPException(
-                status_code=403,
-                detail="Cache cleanup is restricted to localhost and local network only"
-            )
-        
+        client_ip = _require_local_client(request, "Cache cleanup")
+
         try:
             cache = get_cache()
             deleted = cache.cleanup_expired()
