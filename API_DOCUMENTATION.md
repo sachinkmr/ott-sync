@@ -318,39 +318,63 @@ Manually trigger cron cleanup for both services.
 
 ### GET /wakeup
 
-Send Wake-on-LAN magic packet (custom utility).
+Send Wake-on-LAN magic packet to the configured target. Requires
+`wakeup.mac_address` and `wakeup.broadcast_address` set in config.json;
+otherwise returns **400 Bad Request**.
 
-**Response:**
+**Response (success):**
 ```json
 {
-  "status": "ok",
+  "ok": true,
   "message": "Magic packet sent successfully"
 }
 ```
 
+**Response (runtime failure):**
+```json
+{
+  "ok": false,
+  "error": "wakeonlan command not found. Install with: apt-get install wakeonlan"
+}
+```
+
+## Response Conventions
+
+Endpoints fall into two categories:
+
+**Action endpoints** (POST webhooks, callbacks, cache ops, wakeup, cron) return
+an envelope with an `ok: bool` flag:
+
+```json
+{"ok": true, "message": "..."}   // success
+{"ok": false, "error": "..."}    // failure (returned with HTTP 200 so webhook
+                                 // senders like Radarr/Sonarr don't retry)
+```
+
+Webhook handlers may also set `"skipped": "duplicate"` when the dedup window
+catches a retry.
+
+**Read endpoints** (`/health`, `/metrics`, `/cache/stats`, etc.) return
+domain-specific JSON objects directly (see each endpoint's schema).
+
 ## Error Responses
 
-All endpoints may return standard HTTP error responses:
+Validation errors and programming bugs raise FastAPI's standard
+`HTTPException` and surface as a JSON body with a `detail` string:
 
 **400 Bad Request:**
 ```json
-{
-  "detail": "Invalid request parameters"
-}
+{"detail": "Invalid request parameters"}
 ```
 
 **403 Forbidden:**
 ```json
-{
-  "detail": "Cache invalidation is restricted to localhost and local network only"
-}
+{"detail": "Cache invalidation is restricted to localhost and local network only"}
 ```
 
 **500 Internal Server Error:**
 ```json
-{
-  "detail": "Database connection failed"
-}
+{"detail": "Database connection failed"}
 ```
 
 ## Rate Limiting

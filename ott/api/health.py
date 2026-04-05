@@ -145,16 +145,16 @@ def register_health_routes(
                 subprocess.run, cmd, check=True, capture_output=True, text=True
             )
             logger.info("✅ Magic packet sent")
-            return {"status": "ok", "message": "Magic packet sent successfully"}
+            return {"ok": True, "message": "Magic packet sent successfully"}
         except FileNotFoundError:
             logger.error("wakeonlan command not found - install wakeonlan package")
             return {
-                "status": "error",
-                "message": "wakeonlan command not found. Install with: apt-get install wakeonlan",
+                "ok": False,
+                "error": "wakeonlan command not found. Install with: apt-get install wakeonlan",
             }
         except subprocess.CalledProcessError as e:
             logger.error(f"Failed to send WoL packet: {e.stderr}")
-            return {"status": "error", "message": f"Failed to send packet: {e.stderr}"}
+            return {"ok": False, "error": f"Failed to send packet: {e.stderr}"}
     
     @app.get(
         "/cron",
