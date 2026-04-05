@@ -5,6 +5,52 @@ All notable changes to OTT Hooks will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Manual approval mode** via `auto_download` config flag (default: `false`).
+  When disabled, every new Radarr/Sonarr addition is gated: item is
+  unmonitored, queue is cancelled, TMDB + AniList ratings are surfaced in
+  the Telegram notification, and an "Approve Download" button waits
+  (indefinitely) for user confirmation. See README "Manual Mode" section.
+- New `approve:*` Telegram callback handler that re-monitors the item and
+  triggers a search.
+- `TelegramCallbackAction` Pydantic model + `parse_callback_action()`
+  helper — all callback_data strings are now validated before use.
+- `ArrClient.get_queue()` and `ArrClient.delete_queue_item()` helpers
+  (explicit `blocklist=false` by default).
+- `OTTBaseManager._cancel_queue_items_for()` — fetches queue, filters by
+  movie/series id, deletes each matching record. Handles Sonarr's
+  multi-episode-per-series case correctly.
+
+### Fixed
+- Critical: `config.json.example` had duplicate `anime_detection` block
+  that made the file invalid JSON (§1.1).
+- Critical: `Config.telegram` was built as a dynamic object and immediately
+  overwritten with a dict — inconsistent access patterns (§1.2).
+- Critical: 7 fields in `Config.__init__` were initialized twice; the
+  second block silently overwrote the first (§1.3).
+- Critical: `RadarrManager` initial construction was missing
+  `auto_download`/`tmdb_client`/`anilist_client` — manual mode broken
+  until first config reload (§1.4).
+- Critical: provider-tag cleanup removed legitimate tags because the
+  condition used `or` instead of `and` (§1.5).
+- Critical: `TelegramNotifier.send()` / `send_photo()` did not accept
+  `chat_id` kwarg that `sonarr.py` passed → TypeError on anime-maybe
+  alerts (§1.6).
+- Critical: duplicate `/wakeup` and `/cron` routes in `health.py` — first
+  (documented) versions were dead code (§1.7).
+- Critical: `Db.session()` context manager auto-committed while
+  repositories also committed explicitly (§1.8).
+- Queue cancellation used `DELETE /queue?movieId=X` which is not a valid
+  *arr endpoint; fixed to use `DELETE /queue/{id}` (§6.1).
+- Telegram approve/override callbacks could race with the webhook flow,
+  silently overwriting `monitored=True` back to False. Now acquire the
+  per-item lock (§6.2).
+- `admin_chat_id` was hardcoded empty in `anime_config_dict`; now read
+  from `config.telegram` (§6.4).
+- IMDb rating placeholder dropped from captions — was always N/A (§6.3).
+
 ## [2.0.0] - 2026-01-27
 
 ### Added

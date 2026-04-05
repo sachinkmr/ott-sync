@@ -13,26 +13,32 @@ Bridges Radarr/Sonarr with JustWatch — auto-skips downloads for media already 
 - Config: `config.json` (gitignored) — see `config.json.example` for shape.
 
 ## Decision flow (webhook handler, summarized)
-1. If item has `ott-override` tag → skip all checks (manual-add escape hatch).
-2. JustWatch lookup → if on a configured provider: tag `ott-<provider>`, unmonitor, delete from *arr queue (`blocklist=false`).
-3. If NOT on OTT → rating gate (TMDB `vote_average`, min 50 votes):
-   - ≥ 80% → auto-download
-   - 70–79% OR trending → Telegram approval (wait forever, no timeout)
-   - < 70% AND not trending → skip silently (`ott-low-rating`)
-   - No rating → defer 7 days, re-check on weekly cron (`ott-pending-rating`)
-4. Sonarr is two-stage: series-level at `SeriesAdd`, season-level at per-episode `Grab` webhook.
+
+Controlled by `auto_download` config flag (default: `false`).
+
+1. If item has `ott-override` tag → skip all checks (user escape hatch).
+2. **Automatic mode** (`auto_download: true`):
+   - JustWatch lookup → on a configured provider: tag `ott-<provider>`, unmonitor, cancel any queued downloads (queue-record id DELETE, `blocklist=false`), send Telegram notification with "Download anyway" override button.
+   - Not on OTT → proceed normally, download.
+3. **Manual mode** (`auto_download: false`):
+   - Every new item is gated; OTT is informational only.
+   - Unmonitor, cancel queue, fetch TMDB/AniList ratings, send Telegram notification with "Approve Download" button, tag `ott-processed`, wait forever for user decision.
+   - `Grab` event for already-notified item → cancel queue only (no re-notify).
+4. Telegram callbacks:
+   - `override:*` (automatic mode) — re-monitor + trigger search, add `ott-override` tag.
+   - `approve:*` (manual mode) — re-monitor + trigger search (no tag change).
+   - Both callbacks acquire the per-item lock to serialize against webhook flow.
+5. Future: 3-tier rating threshold gate (Plan.md Phase 7.1) layers on top of `auto_download=true` as "auto-approve above X%".
 
 ## Tag vocabulary (applied to *arr items)
 - `ott-<provider>` — found on that OTT provider (e.g. `ott-netflix`).
-- `ott-override` — user escape hatch; ott-sync never touches these items.
+- `ott-override` — user escape hatch; ott-sync never touches these items after this tag is added.
 - `ott-processed` / `ott-skipped` — terminal states.
-- `ott-low-rating` — skipped because rating below threshold.
-- `ott-pending-rating` / `ott-pending-approval` — in rating-gate limbo.
 - `anime-checked` / `anime-detected` / `anime-maybe` — anime detection states.
-- Import-list tags (e.g. `list-trakt`) — configured per-list in *arr; used to distinguish manual vs list-sourced adds.
+- Import-list tags (e.g. `list-trakt`) — configured per-list in *arr; Plan.md Phase 7.2 plans to use them for inverse-detection of manual adds.
 
 ## Known issues
-See [Plan.md](Plan.md) — 36 catalogued issues across 5 phases (critical correctness → reliability → hardening → tests → docs) plus Phase 6 for the rating-gate feature. Start with Phase 1 before anything else.
+See [Plan.md](Plan.md) — 36 catalogued issues across phases. Phase 1 (critical correctness, 8 items) and Phase 6 (manual-mode polish, 7 items) both complete as of 2026-04-05. Phases 2 (reliability), 3 (hardening), 4 (tests), 5 (docs), 7 (optional enhancements) pending.
 
 ## Running
 - `python main.py` — starts FastAPI server + cron scheduler.
@@ -44,4 +50,5 @@ See [Plan.md](Plan.md) — 36 catalogued issues across 5 phases (critical correc
 - Config hot-reload swaps manager instances live — webhook handlers can see half-swapped state during reload (no lock yet; see Plan.md §3.2).
 - `datetime.utcnow()` vs `datetime.now()` are mixed across cache layers causing TTL drift (Plan.md §2.9).
 - Webhook endpoints have no signature verification (Plan.md §2.4).
-- `self.telegram` is assigned twice in `config.py` with conflicting types — both dict and object access patterns exist in the codebase (Plan.md §1.2).
+- Deployment config lives at `/ssd/tools/docker/arrs/ott-sync/config.json` (referenced by `test_config.py::test_config_load_missing_file`, which fails because of the fallback path — Plan.md §2.8).
+- `config.telegram` is a dict now (post Plan.md §1.2); access fields with `config.telegram["key"]`, not attribute style.

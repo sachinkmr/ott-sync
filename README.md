@@ -74,6 +74,15 @@ OTT Hooks integrates with Radarr/Sonarr to:
 - Re-blocking detection (prevents bypass)
 - User-friendly status messages
 
+### Manual Approval Mode (`auto_download: false`)
+- **Every** new Radarr/Sonarr addition is held for explicit approval
+- Item is unmonitored and any queued download is cancelled on arrival
+- Notification shows TMDB + AniList ratings (when available) to inform the decision
+- Single "✅ Approve Download" button re-monitors the item and triggers a search
+- No timeout — approvals wait indefinitely
+- Apply the `ott-override` tag manually to bypass the pipeline entirely
+  (useful for anything you've already decided you want)
+
 ### Production Ready
 - Modular architecture (20+ Python modules)
 - Type hints throughout
@@ -111,7 +120,8 @@ Edit `config.json` with your details:
   },
   "region": "IN",
   "cron_initial_delay_seconds": 60,
-  "cron_interval_hours": 24
+  "cron_interval_hours": 24,
+  "auto_download": false
 }
 ```
 
