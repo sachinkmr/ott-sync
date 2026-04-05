@@ -132,16 +132,20 @@ class DatabaseClient:
                 session.commit()
 
         Raises:
-            RuntimeError: if close() is in progress - no new sessions.
+            DatabaseError: if close() is in progress - no new sessions.
         """
         if self._closing:
             raise DatabaseError("Database is shutting down; no new sessions")
         if not self._initialized:
             self.initialize()
 
+        # Create the session FIRST; only increment the active-session counter
+        # after we have a session to hand back. If _session_factory() raises
+        # (e.g. engine disposed by a racing close()) the counter stays clean
+        # and close() won't wait forever for a session that never existed.
+        session = self._session_factory()
         with self._active_sessions_lock:
             self._active_sessions += 1
-        session = self._session_factory()
         try:
             yield session
         except Exception:
@@ -332,9 +336,9 @@ def get_db() -> DatabaseClient:
     
     Returns:
         DatabaseClient instance
-        
+
     Raises:
-        RuntimeError: If database not initialized
+        DatabaseError: If database not initialized
     """
     if db is None:
         raise DatabaseError("Database not initialized. Call initialize_database() first.")

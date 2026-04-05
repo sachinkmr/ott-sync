@@ -268,7 +268,7 @@ class Config:
         Raises:
             FileNotFoundError: If config file doesn't exist
             json.JSONDecodeError: If config file is invalid JSON
-            KeyError: If required config keys are missing
+            ConfigurationError: If required keys are missing or validation fails
         """
         if not path.exists():
             raise FileNotFoundError(f"Config file not found: {path}")

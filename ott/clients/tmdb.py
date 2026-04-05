@@ -5,6 +5,7 @@ from typing import Optional
 
 import requests
 
+from ..exceptions import ConfigurationError
 from ..utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger("ott-hooks")
@@ -49,7 +50,6 @@ class TMDBClient:
             timeout: Request timeout in seconds (default: 30)
         """
         if not api_key:
-            from ..exceptions import ConfigurationError
             raise ConfigurationError("TMDB API key is required")
         
         self.api_key = api_key
