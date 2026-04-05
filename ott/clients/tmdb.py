@@ -276,3 +276,62 @@ class TMDBClient:
             List of ISO 3166-1 country codes (e.g., ["JP"], ["US", "GB"])
         """
         return series_data.get("origin_country", [])
+    
+    def get_movie_ratings(self, tmdb_id: int) -> Optional[dict]:
+        """Fetch movie ratings from TMDB (includes TMDb score and IMDb ID)
+        
+        Args:
+            tmdb_id: TMDB movie ID
+            
+        Returns:
+            Dict with ratings: {"tmdb": 8.5, "imdb_id": "tt1234567"} or None on error
+        """
+        logger.debug(f"[TMDB] Fetching ratings for movie ID {tmdb_id}")
+        
+        def _fetch():
+            try:
+                url = f"{self.BASE_URL}/movie/{tmdb_id}"
+                params = {"api_key": self.api_key}
+                
+                response = self._session.get(url, params=params, timeout=self.timeout)
+                
+                if response.status_code == 429:
+                    raise TMDBRateLimitError("TMDB rate limit exceeded")
+                
+                if not response.ok:
+                    logger.error(f"[TMDB] Movie ratings error {response.status_code}")
+                    return None
+                
+                data = response.json()
+                
+                return {
+                    "tmdb": data.get("vote_average"),
+                    "imdb_id": data.get("imdb_id")
+                }
+                
+            except requests.RequestException as e:
+                logger.error(f"[TMDB] Movie ratings request failed: {e}")
+                return None
+        
+        try:
+            return self.rate_limiter.execute(_fetch, timeout=self.timeout + 5)
+        except Exception as e:
+            logger.error(f"[TMDB] Movie ratings error: {e}")
+            return None
+    
+    def get_series_ratings(self, tmdb_id: int) -> Optional[dict]:
+        """Fetch series ratings from TMDB
+        
+        Args:
+            tmdb_id: TMDB series ID
+            
+        Returns:
+            Dict with ratings: {"tmdb": 8.5} or None on error
+        """
+        # Series details already fetched contain vote_average
+        series_data = self.get_series_details(tmdb_id, include_keywords=False, include_external_ids=False)
+        
+        if not series_data:
+            return None
+        
+        return {"tmdb": series_data.get("vote_average")}

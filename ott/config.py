@@ -178,6 +178,9 @@ class Config:
         # Delayed verification to catch race conditions (seconds)
         self.verification_delay_seconds: int = config_dict.get("verification_delay_seconds", 60)
         
+        # Auto download mode (True = automatic, False = manual approval required)
+        self.auto_download: bool = config_dict.get("auto_download", False)
+        
         # Anime detection configuration
         anime_config_dict = config_dict.get("anime_detection", {})
         self.anime_detection: Optional[AnimeDetectionConfig] = None

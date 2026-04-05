@@ -29,6 +29,9 @@
   "_comment_verification": "Delay before verifying item wasn't grabbed (prevents race conditions)",
   "verification_delay_seconds": 60,
   
+  "_comment_auto_download": "Download mode: true = automatic (current behavior), false = manual approval required for ALL items",
+  "auto_download": false,
+  
   "_comment_webhook_events": "Webhook events to process (MovieAdded, SeriesAdded, Grab, etc.)",
   "webhook_events": [
     "MovieAdded",

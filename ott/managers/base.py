@@ -31,7 +31,10 @@ class OTTBaseManager(ABC):
         telegram: TelegramNotifier,
         ott_providers: set[str],
         timestamp_cache: TimestampCache | None = None,
-        verification_delay_seconds: int = 60
+        verification_delay_seconds: int = 60,
+        auto_download: bool = False,
+        tmdb_client = None,
+        anilist_client = None,
     ):
         """Initialize OTT manager
         
@@ -42,6 +45,9 @@ class OTTBaseManager(ABC):
             ott_providers: Set of allowed OTT provider names
             timestamp_cache: Optional timestamp cache for periodic re-checks
             verification_delay_seconds: Delay before verifying item wasn't grabbed (default 60s)
+            auto_download: If False, require manual approval for all items (default: False)
+            tmdb_client: Optional TMDBClient for fetching ratings
+            anilist_client: Optional AniListClient for fetching anime ratings
         """
         self.client = arr_client
         self.justwatch = justwatch_client
@@ -49,6 +55,9 @@ class OTTBaseManager(ABC):
         self.ott_providers = ott_providers
         self.timestamp_cache = timestamp_cache or TimestampCache()
         self.verification_delay_seconds = verification_delay_seconds
+        self.auto_download = auto_download
+        self.tmdb_client = tmdb_client
+        self.anilist_client = anilist_client
         self.pool = ThreadPoolExecutor(max_workers=DEFAULT_THREAD_POOL_SIZE)
         self._metrics_lock = threading.Lock()
         self._tag_cache: dict[int, str] = {}  # Cache tag ID -> label mapping
@@ -455,6 +464,58 @@ class OTTBaseManager(ABC):
         
         return users
     
+    def _fetch_ratings(self, item: dict[str, Any]) -> dict[str, float | None]:
+        """Fetch ratings from various sources (TMDb, IMDb, AniList)
+        
+        Args:
+            item: Item data from webhook payload
+            
+        Returns:
+            Dict with ratings: {"tmdb": 8.5, "imdb": 7.9, "anilist": 8.2} or None values
+        """
+        ratings = {
+            "tmdb": None,
+            "imdb": None,
+            "anilist": None
+        }
+        
+        tmdb_id = item.get("tmdbId")
+        
+        # Fetch TMDb ratings
+        if self.tmdb_client and tmdb_id:
+            try:
+                if self.item_type() == "movie":
+                    tmdb_data = self.tmdb_client.get_movie_ratings(tmdb_id)
+                    if tmdb_data:
+                        ratings["tmdb"] = tmdb_data.get("tmdb")
+                        imdb_id = tmdb_data.get("imdb_id")
+                        
+                        # Try to fetch IMDb rating (would need additional API or scraping)
+                        # For now, we'll use TMDb's rating as a proxy
+                        # In the future, you could integrate with OMDb API or similar
+                else:  # series
+                    tmdb_data = self.tmdb_client.get_series_ratings(tmdb_id)
+                    if tmdb_data:
+                        ratings["tmdb"] = tmdb_data.get("tmdb")
+            except Exception as e:
+                logger.error(f"[RATINGS] TMDb fetch error: {e}")
+        
+        # Fetch AniList ratings (for anime)
+        # This would require detecting if it's anime and having the AniList ID
+        # For now, we'll skip this unless anime detection is enabled
+        if self.anilist_client:
+            try:
+                # Check if item has anime-detected tag
+                tags = set(item.get("tags", []))
+                if self.anime_detected_tag in tags:
+                    # Would need AniList ID from somewhere (anime_detector)
+                    # This is a placeholder - actual implementation depends on your anime detection setup
+                    pass
+            except Exception as e:
+                logger.error(f"[RATINGS] AniList fetch error: {e}")
+        
+        return ratings
+    
     def _extract_plex_user(self, item: dict[str, Any]) -> str | None:
         """Extract Plex user from item metadata
         
@@ -628,6 +689,134 @@ class OTTBaseManager(ABC):
         if event == "Grab":
             logger.info("[DECISION] Grab event → checking OTT as fallback")
     
+        # ═══════════════════════════════════════════════════════════════════
+        # MANUAL MODE: Require approval for ALL items
+        # ═══════════════════════════════════════════════════════════════════
+        if not self.auto_download:
+            logger.info(f"[MANUAL-MODE] Processing item in manual approval mode")
+            
+            # Skip if item is monitored (already approved/downloading)
+            if was_monitored:
+                logger.info(f"[MANUAL-MODE] Item is monitored (approved), skipping")
+                return
+            
+            # Skip if already has override tag (approved but not yet monitored)
+            if self.override_tag in current_tags:
+                logger.info(f"[MANUAL-MODE] Item has override tag (approved), skipping")
+                return
+            
+            # For Grab events: Remove from queue but don't send duplicate notification
+            if event == "Grab" and self.processed_tag in current_tags:
+                logger.info(f"[MANUAL-MODE] Grab event for already-notified item - removing from queue only")
+                self.client.post("command", json={
+                    "name": "CancelPendingDownloads",
+                    f"{self.item_type()}Ids": [item_id],
+                })
+                self.client.delete("queue", params={
+                    f"{self.item_type()}Id": item_id,
+                    "removeFromClient": True,
+                })
+                return
+            
+            # Skip if already processed (notification already sent for Add events)
+            if self.processed_tag in current_tags:
+                logger.info(f"[MANUAL-MODE] Item already notified, skipping")
+                return
+            
+            # 1. Unmonitor item immediately to prevent auto-grab (if not already unmonitored)
+            if current_item.get("monitored", False):
+                logger.info(f"[MANUAL-MODE] Unmonitoring item id={item_id}")
+                current_item["monitored"] = False
+                update_res = self.client.put(f"{self.item_type()}/{item_id}", json=current_item)
+                if not update_res:
+                    logger.error(f"[MANUAL-MODE] Failed to unmonitor item, aborting")
+                    return
+            
+            # 2. Remove from download queue if already added
+            logger.info(f"[MANUAL-MODE] Removing from download queue if present")
+            self.client.post("command", json={
+                "name": "CancelPendingDownloads",
+                f"{self.item_type()}Ids": [item_id],
+            })
+            self.client.delete("queue", params={
+                f"{self.item_type()}Id": item_id,
+                "removeFromClient": True,
+            })
+            
+            # 3. Fetch ratings from all sources
+            ratings = self._fetch_ratings(item)
+            
+            # 4. Check OTT availability (informational only)
+            tmdb_id = item.get("tmdbId")
+            imdb_id = item.get("imdbId")
+            
+            providers = self.justwatch.get_providers(
+                title, 
+                year, 
+                self.ott_providers,
+                tmdb_id=tmdb_id,
+                imdb_id=imdb_id
+            )
+            
+            provider_name = providers[0] if providers else None
+            
+            # 5. Extract poster and requester info
+            images = item.get("images", [])
+            poster = next(
+                (img.get("remoteUrl") for img in images if img.get("coverType") == "poster"),
+                None,
+            )
+            
+            plex_users = self._extract_plex_users(list(tags))
+            if plex_users:
+                requested_by = f"{', '.join(plex_users)} (Plex)"
+            else:
+                requested_by = "Automated"
+            
+            # 6. Build notification caption with ratings
+            caption = build_telegram_caption(
+                title=title,
+                year=year,
+                provider=provider_name,
+                region=self.telegram.region,
+                item_type=self.item_type(),
+                item_id=item_id,
+                requested_by=requested_by,
+                tmdb_rating=ratings.get("tmdb"),
+                imdb_rating=ratings.get("imdb"),
+                anilist_rating=ratings.get("anilist"),
+                manual_mode=True,
+            )
+            
+            # 7. Send notification with approve button
+            buttons = [[{
+                "text": "✅ Approve Download",
+                "callback_data": f"approve:{self.item_type()}:{item_id}"
+            }]]
+            
+            notification_success = False
+            if poster:
+                notification_success = self.telegram.send_photo(poster, caption, buttons=buttons)
+            else:
+                notification_success = self.telegram.send(caption, buttons=buttons)
+            
+            if not notification_success:
+                logger.error(f"[MANUAL-MODE] Telegram notification failed for id={item_id}")
+            
+            # 8. Mark as processed
+            res = self.client.get(f"{self.item_type()}/{item_id}")
+            if res:
+                data = res.json()
+                data["tags"] = list(set(data.get("tags", [])) | {self.processed_tag})
+                self.client.put(f"{self.item_type()}/{item_id}", json=data)
+            
+            logger.info(f"[MANUAL-MODE] Item unmonitored, awaiting approval")
+            return
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # AUTOMATIC MODE: Only block if found on OTT (current behavior)
+        # ═══════════════════════════════════════════════════════════════════
+        
         # ─────────────────────────────────────────────
         # Pre-emptive monitoring disable (race condition protection)
         # ─────────────────────────────────────────────
@@ -686,6 +875,9 @@ class OTTBaseManager(ABC):
         # Telegram + enforcement decision
         # ─────────────────────────────────────────────
         if providers:
+            # Fetch ratings for automatic mode as well
+            ratings = self._fetch_ratings(item)
+            
             # 🖼 Extract poster if available
             images = item.get("images", [])
             poster = next(
@@ -714,6 +906,10 @@ class OTTBaseManager(ABC):
                 item_type=self.item_type(),
                 item_id=item_id,
                 requested_by=requested_by,
+                tmdb_rating=ratings.get("tmdb"),
+                imdb_rating=ratings.get("imdb"),
+                anilist_rating=ratings.get("anilist"),
+                manual_mode=False,
             )
     
             buttons = [[{
@@ -724,14 +920,35 @@ class OTTBaseManager(ABC):
             # 📣 Best-effort Telegram notification (doesn't affect blocking decision)
             notification_success = False
             if was_previously_blocked:
-                # Re-blocking scenario - simpler message
-                notification_success = self.telegram.send(
+                # Re-blocking scenario - use full caption with ratings
+                reblock_caption = (
                     f"🚨 *Re-block detected*\n\n"
                     f"🎬 *{title}*{f' ({year})' if year else ''}\n\n"
-                    f"This item was previously blocked but a download was attempted.\n"
-                    f"Use the button below to approve if this was intentional.",
-                    buttons=buttons
+                    f"📺 *Available on:* {providers[0]} ({self.telegram.region})\n"
                 )
+                
+                # Add ratings if available
+                ratings_parts = []
+                if ratings.get("tmdb"):
+                    ratings_parts.append(f"⭐ TMDb: {ratings['tmdb']:.1f}/10")
+                if ratings.get("imdb"):
+                    ratings_parts.append(f"⭐ IMDb: {ratings['imdb']:.1f}/10")
+                if ratings.get("anilist"):
+                    ratings_parts.append(f"⭐ AniList: {ratings['anilist']:.1f}/10")
+                
+                if ratings_parts:
+                    reblock_caption += "\n".join(ratings_parts) + "\n"
+                
+                reblock_caption += (
+                    f"\n"
+                    f"This item was previously blocked but a download was attempted.\n"
+                    f"Use the button below to approve if this was intentional."
+                )
+                
+                if poster:
+                    notification_success = self.telegram.send_photo(poster, reblock_caption, buttons=buttons)
+                else:
+                    notification_success = self.telegram.send(reblock_caption, buttons=buttons)
             elif poster:
                 notification_success = self.telegram.send_photo(poster, caption, buttons=buttons)
             else:
@@ -752,7 +969,7 @@ class OTTBaseManager(ABC):
                 f"{self.item_type()} id={item_id}"
             )
 
-            # � FINAL override check before enforcement
+            # 🔐 FINAL override check before enforcement
             # User may have approved between re-fetch and now
             final_check = self.client.get(f"{self.item_type()}/{item_id}")
             if final_check:

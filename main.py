@@ -68,6 +68,10 @@ def reload_configuration():
         radarr_client = ArrClient(config.radarr_url, config.radarr_api_key)
         sonarr_client = ArrClient(config.sonarr_url, config.sonarr_api_key)
         
+        # Initialize TMDb/AniList clients for ratings (optional, but recommended for manual mode)
+        tmdb_client = None
+        anilist_client = None
+        
         # Initialize anime detection if enabled
         anime_detector = None
         anime_config_dict = None
@@ -79,50 +83,53 @@ def reload_configuration():
             
             tmdb_client = TMDBClient(
                 api_key=config.anime_detection.tmdb_api_key,
-            rate_limit_calls=config.anime_detection.tmdb_rate_limit_calls,
-            rate_limit_period=config.anime_detection.tmdb_rate_limit_period
-        )
-        
-        anilist_client = AniListClient(
-            rate_limit_calls=config.anime_detection.anilist_rate_limit_calls,
-            rate_limit_period=config.anime_detection.anilist_rate_limit_period
-        )
-        
-        anime_detector = AnimeDetector(
-            tmdb_client=tmdb_client,
-            anilist_client=anilist_client,
-            require_anilist_match=config.anime_detection.require_anilist_match
-        )
-        
-        # Convert anime config to dict for manager
-        anime_config_dict = {
-            "detection": {
-                "require_anilist_match": config.anime_detection.require_anilist_match
-            },
-            "metadata": {
-                "auto_set_series_type": config.anime_detection.auto_set_series_type,
-                "auto_set_profile": config.anime_detection.auto_set_profile,
-                "profile_name": config.anime_detection.profile_name,
-                "skip_if_profile_contains_anime": config.anime_detection.skip_if_profile_contains_anime
-            },
-            "telegram": {
-                "notify_maybe": config.anime_detection.notify_maybe,
-                "admin_chat_id": ""
+                rate_limit_calls=config.anime_detection.tmdb_rate_limit_calls,
+                rate_limit_period=config.anime_detection.tmdb_rate_limit_period
+            )
+            
+            anilist_client = AniListClient(
+                rate_limit_calls=config.anime_detection.anilist_rate_limit_calls,
+                rate_limit_period=config.anime_detection.anilist_rate_limit_period
+            )
+            
+            anime_detector = AnimeDetector(
+                tmdb_client=tmdb_client,
+                anilist_client=anilist_client,
+                require_anilist_match=config.anime_detection.require_anilist_match
+            )
+            
+            # Convert anime config to dict for manager
+            anime_config_dict = {
+                "detection": {
+                    "require_anilist_match": config.anime_detection.require_anilist_match
+                },
+                "metadata": {
+                    "auto_set_series_type": config.anime_detection.auto_set_series_type,
+                    "auto_set_profile": config.anime_detection.auto_set_profile,
+                    "profile_name": config.anime_detection.profile_name,
+                    "skip_if_profile_contains_anime": config.anime_detection.skip_if_profile_contains_anime
+                },
+                "telegram": {
+                    "notify_maybe": config.anime_detection.notify_maybe,
+                    "admin_chat_id": ""
+                }
             }
-        }
-        
-        logger.info("  ✓ Anime detection initialized")
+            
+            logger.info("  ✓ Anime detection initialized")
         
         # Store telegram for route access (hot reloadable)
         _managers['telegram'] = telegram
         
-        # Reinitialize managers
+        # Reinitialize managers with auto_download and rating clients
         _managers['radarr'] = RadarrManager(
             arr_client=radarr_client,
             justwatch_client=justwatch,
             telegram=telegram,
             ott_providers=set(config.ott_providers),
-            verification_delay_seconds=config.verification_delay_seconds
+            verification_delay_seconds=config.verification_delay_seconds,
+            auto_download=config.auto_download,
+            tmdb_client=tmdb_client,
+            anilist_client=anilist_client,
         )
         
         _managers['sonarr'] = SonarrManager(
@@ -131,6 +138,9 @@ def reload_configuration():
             telegram=telegram,
             ott_providers=set(config.ott_providers),
             verification_delay_seconds=config.verification_delay_seconds,
+            auto_download=config.auto_download,
+            tmdb_client=tmdb_client,
+            anilist_client=anilist_client,
             anime_detector=anime_detector,
             anime_config=anime_config_dict
         )
@@ -139,6 +149,7 @@ def reload_configuration():
         logger.info(f"  - OTT Providers: {len(config.ott_providers)}")
         logger.info(f"  - Telegram: {'enabled' if telegram.enabled else 'disabled'}")
         logger.info(f"  - Region: {config.region}")
+        logger.info(f"  - Auto Download: {'enabled' if config.auto_download else 'disabled (manual mode)'}")
         logger.info(f"  - Anime Detection: {'enabled' if anime_detector else 'disabled'}")
         
     except Exception as e:

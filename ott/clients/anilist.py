@@ -98,6 +98,61 @@ class AniListClient:
             f"[ANILIST] Initialized with rate limit: {rate_limit_calls} calls/{rate_limit_period}s"
         )
     
+    def get_ratings(self, anilist_id: int) -> Optional[float]:
+        """Fetch anime rating from AniList
+        
+        Args:
+            anilist_id: AniList media ID
+            
+        Returns:
+            Rating score (0-100 scale) or None on error
+        """
+        logger.debug(f"[ANILIST] Fetching rating for ID {anilist_id}")
+        
+        query = """
+        query ($id: Int) {
+          Media(id: $id, type: ANIME) {
+            averageScore
+          }
+        }
+        """
+        
+        variables = {"id": anilist_id}
+        
+        def _fetch():
+            try:
+                response = self._session.post(
+                    self.GRAPHQL_URL,
+                    json={"query": query, "variables": variables},
+                    timeout=self.timeout
+                )
+                
+                if response.status_code == 429:
+                    raise AniListRateLimitError("AniList rate limit exceeded")
+                
+                if not response.ok:
+                    logger.error(f"[ANILIST] Rating error {response.status_code}")
+                    return None
+                
+                data = response.json()
+                
+                if "errors" in data:
+                    logger.error(f"[ANILIST] GraphQL errors: {data['errors']}")
+                    return None
+                
+                score = data.get("data", {}).get("Media", {}).get("averageScore")
+                return score / 10.0 if score else None  # Convert to 0-10 scale
+                
+            except requests.RequestException as e:
+                logger.error(f"[ANILIST] Rating request failed: {e}")
+                return None
+        
+        try:
+            return self.rate_limiter.execute(_fetch, timeout=self.timeout + 5)
+        except Exception as e:
+            logger.error(f"[ANILIST] Rating error: {e}")
+            return None
+    
     def search_anime(
         self,
         title: str,

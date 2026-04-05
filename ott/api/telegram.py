@@ -119,73 +119,136 @@ def register_telegram_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable,
             return {"ok": True}
 
         # ─────────────────────────────────────────────
-        # OTT Override Callbacks
+        # OTT Override Callbacks (Automatic Mode)
         # ─────────────────────────────────────────────
-        if not callback_data.startswith("override:"):
-            return {"ok": True}
+        if callback_data.startswith("override:"):
+            # Parse callback data: "override:movie:123" or "override:series:456"
+            try:
+                _, item_type, item_id = callback_data.split(":")
+                item_id = int(item_id)
+            except (ValueError, IndexError) as e:
+                logger.error(f"[TG] Invalid callback data format: {callback_data} - {e}")
+                telegram.send("❌ Invalid callback data")
+                return {"ok": True}
 
-        # Parse callback data: "override:movie:123" or "override:series:456"
-        try:
-            _, item_type, item_id = callback_data.split(":")
-            item_id = int(item_id)
-        except (ValueError, IndexError) as e:
-            logger.error(f"[TG] Invalid callback data format: {callback_data} - {e}")
-            telegram.send("❌ Invalid callback data")
-            return {"ok": True}
+            # Select appropriate manager
+            mgr = get_radarr_mgr() if item_type == "movie" else get_sonarr_mgr()
+            
+            # Fetch current item state
+            res = mgr.client.get(f"{item_type}/{item_id}")
+            if not res:
+                logger.error(f"[TG] Failed to fetch {item_type} id={item_id}")
+                telegram.send("❌ Failed to apply override - item not found")
+                return {"ok": True}
 
-        # Select appropriate manager
-        mgr = get_radarr_mgr() if item_type == "movie" else get_sonarr_mgr()
-        
-        # Fetch current item state
-        res = mgr.client.get(f"{item_type}/{item_id}")
-        if not res:
-            logger.error(f"[TG] Failed to fetch {item_type} id={item_id}")
-            telegram.send("❌ Failed to apply override - item not found")
-            return {"ok": True}
+            data = res.json()
+            tags = set(data.get("tags", []))
 
-        data = res.json()
-        tags = set(data.get("tags", []))
+            # Apply override: remove skipped, add override
+            tags.discard(mgr.skipped_tag)
+            tags.add(mgr.override_tag)
 
-        # Apply override: remove skipped, add override
-        tags.discard(mgr.skipped_tag)
-        tags.add(mgr.override_tag)
+            data["tags"] = list(tags)
+            data["monitored"] = True
 
-        data["tags"] = list(tags)
-        data["monitored"] = True
+            # Update item
+            update_res = mgr.client.put(f"{item_type}/{item_id}", json=data)
+            if not update_res:
+                logger.error(f"[TG] Failed to update {item_type} id={item_id}")
+                telegram.send("❌ Failed to apply override - update failed")
+                return {"ok": True}
+            
+            # Cancel any pending verification timer for this item
+            mgr._cancel_verification(item_id)
 
-        # Update item
-        update_res = mgr.client.put(f"{item_type}/{item_id}", json=data)
-        if not update_res:
-            logger.error(f"[TG] Failed to update {item_type} id={item_id}")
-            telegram.send("❌ Failed to apply override - update failed")
-            return {"ok": True}
-        
-        # Cancel any pending verification timer for this item
-        mgr._cancel_verification(item_id)
+            # Trigger search
+            search_command = COMMAND_MOVIES_SEARCH if item_type == "movie" else COMMAND_SERIES_SEARCH
+            cmd_res = mgr.client.post("command", json={
+                "name": search_command,
+                f"{item_type}Ids": [item_id],
+            })
 
-        # Trigger search
-        search_command = COMMAND_MOVIES_SEARCH if item_type == "movie" else COMMAND_SERIES_SEARCH
-        cmd_res = mgr.client.post("command", json={
-            "name": search_command,
-            f"{item_type}Ids": [item_id],
-        })
+            # Verify command was accepted
+            if not cmd_res:
+                logger.error(f"[TG] Search command failed for {item_type} id={item_id}")
+                telegram.send(
+                    f"⚠️ *Override applied but search failed*\n\n"
+                    f"Tags updated, but automatic search could not be triggered.\n"
+                    f"Please manually search for {data.get('title', 'item')}."
+                )
+                return {"ok": True}
 
-        # Verify command was accepted
-        if not cmd_res:
-            logger.error(f"[TG] Search command failed for {item_type} id={item_id}")
+            # Send confirmation
             telegram.send(
-                f"⚠️ *Override applied but search failed*\n\n"
-                f"Tags updated, but automatic search could not be triggered.\n"
-                f"Please manually search for {data.get('title', 'item')}."
+                f"⬇️ *Download confirmed*\n\n"
+                f"Override applied by {user}.\n"
+                f"Search triggered for {data.get('title', 'item')}."
             )
+
+            logger.info(f"[TG] Override applied by {user} for {item_type} id={item_id}")
             return {"ok": True}
 
-        # Send confirmation
-        telegram.send(
-            f"⬇️ *Download confirmed*\n\n"
-            f"Override applied by {user}.\n"
-            f"Search triggered for {data.get('title', 'item')}."
-        )
+        # ─────────────────────────────────────────────
+        # Manual Approval Callbacks (Manual Mode)
+        # ─────────────────────────────────────────────
+        if callback_data.startswith("approve:"):
+            # Parse callback data: "approve:movie:123" or "approve:series:456"
+            try:
+                _, item_type, item_id = callback_data.split(":")
+                item_id = int(item_id)
+            except (ValueError, IndexError) as e:
+                logger.error(f"[TG-MANUAL] Invalid callback data format: {callback_data} - {e}")
+                telegram.send("❌ Invalid callback data")
+                return {"ok": True}
 
-        logger.info(f"[TG] Override applied by {user} for {item_type} id={item_id}")
+            # Select appropriate manager
+            mgr = get_radarr_mgr() if item_type == "movie" else get_sonarr_mgr()
+            
+            # Fetch current item state
+            res = mgr.client.get(f"{item_type}/{item_id}")
+            if not res:
+                logger.error(f"[TG-MANUAL] Failed to fetch {item_type} id={item_id}")
+                telegram.send("❌ Failed to approve - item not found")
+                return {"ok": True}
+
+            data = res.json()
+            title = data.get("title", "item")
+
+            # Re-monitor the item to allow download
+            data["monitored"] = True
+
+            # Update item
+            update_res = mgr.client.put(f"{item_type}/{item_id}", json=data)
+            if not update_res:
+                logger.error(f"[TG-MANUAL] Failed to update {item_type} id={item_id}")
+                telegram.send("❌ Failed to approve - update failed")
+                return {"ok": True}
+
+            # Trigger search
+            search_command = COMMAND_MOVIES_SEARCH if item_type == "movie" else COMMAND_SERIES_SEARCH
+            cmd_res = mgr.client.post("command", json={
+                "name": search_command,
+                f"{item_type}Ids": [item_id],
+            })
+
+            # Verify command was accepted
+            if not cmd_res:
+                logger.error(f"[TG-MANUAL] Search command failed for {item_type} id={item_id}")
+                telegram.send(
+                    f"⚠️ *Approved but search failed*\n\n"
+                    f"Item re-monitored, but automatic search could not be triggered.\n"
+                    f"Please manually search for {title}."
+                )
+                return {"ok": True}
+
+            # Send confirmation
+            telegram.send(
+                f"✅ *Download Approved*\n\n"
+                f"Approved by {user}.\n"
+                f"Search triggered for {title}."
+            )
+
+            logger.info(f"[TG-MANUAL] Download approved by {user} for {item_type} id={item_id}")
+            return {"ok": True}
+
         return {"ok": True}
