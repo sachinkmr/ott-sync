@@ -112,10 +112,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Phase 3: Performance Optimization
 - **JustWatch Caching**
-  - Database-backed cache reduces API calls by ~80%
-  - Automatic cache warming on startup (optional)
-  - Cache hit rate monitoring
-  - Configurable TTL and size limits
+  - Database-backed cache: repeated lookups for the same (tmdb_id|title+year, region)
+    are served from SQLite instead of hitting the JustWatch API.
+  - Hit-rate and entry counts exposed via `GET /cache/stats`; the actual
+    reduction depends on library churn and is observable live.
+  - Configurable TTL and size limits (see `cache.*` config keys).
 
 - **Database Query Optimization**
   - Composite indexes for common queries
@@ -182,10 +183,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Technical Details
 - **Database**: SQLite with WAL mode for better concurrency
-- **Caching**: Intelligent TTL-based caching reduces JustWatch API calls
-- **Performance**: ~80% reduction in external API calls with caching enabled
-- **Memory**: Configurable limits prevent unbounded growth
-- **Security**: Cache invalidation restricted to localhost and local network
+- **Caching**: TTL-based caching of JustWatch lookups; live hit-rate at `/cache/stats`
+- **Memory**: Configurable cache size limit (default 50MB)
+- **Security**: Cache invalidation restricted to localhost and RFC-1918 ranges
 
 ### Migration Notes
 - Database will be automatically created on first run at `/config/ott-hooks.db`
@@ -193,11 +193,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New configuration options are optional with sensible defaults
 - No breaking changes to existing webhooks or API endpoints
 
-### Performance Benchmarks
-- **Cache Hit Rate**: ~80% after warm-up period
-- **Database Size**: ~15-20MB for 1500 movies/600 series after 30 days
-- **API Response Time**: ~100ms cached vs ~1-2s uncached
-- **Memory Usage**: ~50-75MB with default cache settings
+### Observability
+- `GET /cache/stats` — live cache hit-rate, entry counts, and size
+- `GET /metrics` and `/metrics/hourly` — processing metrics from the DB
+- `GET /errors` — recent error log entries
+- `GET /health` — service + DB health
 
 ---
 
