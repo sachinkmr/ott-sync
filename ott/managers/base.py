@@ -11,6 +11,7 @@ from ..clients.arr_client import ArrClient
 from ..clients.justwatch import JustWatchClient
 from ..clients.telegram import TelegramNotifier
 from ..constants import DEFAULT_THREAD_POOL_SIZE
+from ..exceptions import ArrAPIError
 from ..models import ProcessingMetrics, build_telegram_caption
 from ..utils.timestamp_cache import TimestampCache
 
@@ -406,17 +407,17 @@ class OTTBaseManager(ABC):
         """
         res = self.client.get("tag")
         if not res:
-            raise RuntimeError(f"Failed to fetch tags from {self.item_type()} API")
-        
+            raise ArrAPIError(f"Failed to fetch tags from {self.item_type()} API")
+
         tags = res.json()
         for tag in tags:
             if tag["label"] == label:
                 return tag["id"]
-        
+
         # Create new tag
         res = self.client.post("tag", json={"label": label})
         if not res:
-            raise RuntimeError(f"Failed to create tag '{label}'")
+            raise ArrAPIError(f"Failed to create tag '{label}'")
         
         return res.json()["id"]
     

@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 
 from .schema import Base
+from ..exceptions import DatabaseError
 
 logger = logging.getLogger("ott-hooks")
 
@@ -134,7 +135,7 @@ class DatabaseClient:
             RuntimeError: if close() is in progress - no new sessions.
         """
         if self._closing:
-            raise RuntimeError("Database is shutting down; no new sessions")
+            raise DatabaseError("Database is shutting down; no new sessions")
         if not self._initialized:
             self.initialize()
 
@@ -336,7 +337,7 @@ def get_db() -> DatabaseClient:
         RuntimeError: If database not initialized
     """
     if db is None:
-        raise RuntimeError("Database not initialized. Call initialize_database() first.")
+        raise DatabaseError("Database not initialized. Call initialize_database() first.")
     return db
 
 

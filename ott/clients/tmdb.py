@@ -49,7 +49,8 @@ class TMDBClient:
             timeout: Request timeout in seconds (default: 30)
         """
         if not api_key:
-            raise ValueError("TMDB API key is required")
+            from ..exceptions import ConfigurationError
+            raise ConfigurationError("TMDB API key is required")
         
         self.api_key = api_key
         self.timeout = timeout
