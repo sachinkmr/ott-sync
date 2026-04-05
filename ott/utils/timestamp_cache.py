@@ -2,11 +2,32 @@
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("ott-hooks")
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware UTC 'now' - matches the DB/cache layers."""
+    return datetime.now(timezone.utc)
+
+
+def _parse_timestamp(raw: str) -> Optional[datetime]:
+    """Parse an ISO timestamp, normalizing naive values to UTC.
+
+    Older cache files stored naive local-time timestamps. Treat those as UTC
+    (close enough for 30-day recheck windows) so we can compare against
+    timezone-aware values without crashing.
+    """
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 class TimestampCache:
@@ -71,15 +92,14 @@ class TimestampCache:
         """
         key = self._make_key(item_type, item_id)
         timestamp_str = self.cache.get(key)
-        
+
         if not timestamp_str:
             return None
-        
-        try:
-            return datetime.fromisoformat(timestamp_str)
-        except ValueError:
+
+        parsed = _parse_timestamp(timestamp_str)
+        if parsed is None:
             logger.warning(f"[CACHE] Invalid timestamp for {key}: {timestamp_str}")
-            return None
+        return parsed
     
     def should_recheck(
         self, 
@@ -102,7 +122,7 @@ class TimestampCache:
         if last_check is None:
             return True  # Never checked
         
-        threshold = datetime.now() - timedelta(days=recheck_days)
+        threshold = _utcnow() - timedelta(days=recheck_days)
         return last_check < threshold
     
     def update_check(self, item_type: str, item_id: int) -> None:
@@ -113,7 +133,7 @@ class TimestampCache:
             item_id: Item ID
         """
         key = self._make_key(item_type, item_id)
-        self.cache[key] = datetime.now().isoformat()
+        self.cache[key] = _utcnow().isoformat()
         self._save()
     
     def clear_item(self, item_type: str, item_id: int) -> None:
