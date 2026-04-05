@@ -1,5 +1,6 @@
 """Cache management API endpoints"""
 
+import ipaddress
 import logging
 from collections.abc import Callable
 from typing import Optional
@@ -15,8 +16,27 @@ logger = logging.getLogger("ott-hooks")
 # Global cache instance (set in main.py)
 _cache: Optional[JustWatchCache] = None
 
-_LOCALHOST_IPS = {"127.0.0.1", "localhost", "::1"}
-_LOCAL_PREFIXES = ("192.168.", "10.", "172.")
+# Extra hostname-form loopback tokens we may see from the client tuple before
+# socket resolution. ipaddress.ip_address() handles the numeric cases.
+_LOOPBACK_HOSTNAMES = {"localhost"}
+
+
+def _is_local_address(client_host: Optional[str]) -> bool:
+    """Accept loopback + RFC-1918 private ranges only.
+
+    Uses stdlib ipaddress so the check is correct for RFC-1918
+    (10/8, 172.16/12, 192.168/16) and IPv6 loopback / unique-local,
+    instead of string prefix matching (which over-matched 172.0.0.0/8).
+    """
+    if not client_host:
+        return False
+    if client_host in _LOOPBACK_HOSTNAMES:
+        return True
+    try:
+        addr = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_private
 
 
 def _require_local_client(request: Request, action: str) -> str:
@@ -27,10 +47,7 @@ def _require_local_client(request: Request, action: str) -> str:
     AttributeError. Raises HTTPException(403) when the caller isn't local.
     """
     client_host = request.client.host if request.client else None
-    if (
-        client_host in _LOCALHOST_IPS
-        or (client_host and client_host.startswith(_LOCAL_PREFIXES))
-    ):
+    if _is_local_address(client_host):
         return client_host
     logger.warning(f"[CACHE] {action} blocked from {client_host!r}")
     raise HTTPException(
