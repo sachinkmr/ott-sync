@@ -133,35 +133,39 @@ def register_telegram_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable,
 
             # Select appropriate manager
             mgr = get_radarr_mgr() if item_type == "movie" else get_sonarr_mgr()
-            
-            # Fetch current item state
-            res = mgr.client.get(f"{item_type}/{item_id}")
-            if not res:
-                logger.error(f"[TG] Failed to fetch {item_type} id={item_id}")
-                telegram.send("❌ Failed to apply override - item not found")
-                return {"ok": True}
 
-            data = res.json()
-            tags = set(data.get("tags", []))
+            # Serialize against concurrent webhook processing for the same item
+            # (otherwise a mid-flight manual-mode PUT can overwrite monitored=True
+            # back to False, silently cancelling the approval).
+            with mgr._get_item_lock(item_id):
+                # Fetch current item state
+                res = mgr.client.get(f"{item_type}/{item_id}")
+                if not res:
+                    logger.error(f"[TG] Failed to fetch {item_type} id={item_id}")
+                    telegram.send("❌ Failed to apply override - item not found")
+                    return {"ok": True}
 
-            # Apply override: remove skipped, add override
-            tags.discard(mgr.skipped_tag)
-            tags.add(mgr.override_tag)
+                data = res.json()
+                tags = set(data.get("tags", []))
 
-            data["tags"] = list(tags)
-            data["monitored"] = True
+                # Apply override: remove skipped, add override
+                tags.discard(mgr.skipped_tag)
+                tags.add(mgr.override_tag)
 
-            # Update item
-            update_res = mgr.client.put(f"{item_type}/{item_id}", json=data)
-            if not update_res:
-                logger.error(f"[TG] Failed to update {item_type} id={item_id}")
-                telegram.send("❌ Failed to apply override - update failed")
-                return {"ok": True}
-            
-            # Cancel any pending verification timer for this item
-            mgr._cancel_verification(item_id)
+                data["tags"] = list(tags)
+                data["monitored"] = True
 
-            # Trigger search
+                # Update item
+                update_res = mgr.client.put(f"{item_type}/{item_id}", json=data)
+                if not update_res:
+                    logger.error(f"[TG] Failed to update {item_type} id={item_id}")
+                    telegram.send("❌ Failed to apply override - update failed")
+                    return {"ok": True}
+
+                # Cancel any pending verification timer for this item
+                mgr._cancel_verification(item_id)
+
+            # Trigger search (outside lock - command endpoint is fire-and-forget)
             search_command = COMMAND_MOVIES_SEARCH if item_type == "movie" else COMMAND_SERIES_SEARCH
             cmd_res = mgr.client.post("command", json={
                 "name": search_command,
@@ -203,28 +207,32 @@ def register_telegram_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable,
 
             # Select appropriate manager
             mgr = get_radarr_mgr() if item_type == "movie" else get_sonarr_mgr()
-            
-            # Fetch current item state
-            res = mgr.client.get(f"{item_type}/{item_id}")
-            if not res:
-                logger.error(f"[TG-MANUAL] Failed to fetch {item_type} id={item_id}")
-                telegram.send("❌ Failed to approve - item not found")
-                return {"ok": True}
 
-            data = res.json()
-            title = data.get("title", "item")
+            # Serialize against concurrent webhook processing for the same item
+            # (otherwise a mid-flight manual-mode PUT can overwrite monitored=True
+            # back to False, silently cancelling the approval).
+            with mgr._get_item_lock(item_id):
+                # Fetch current item state
+                res = mgr.client.get(f"{item_type}/{item_id}")
+                if not res:
+                    logger.error(f"[TG-MANUAL] Failed to fetch {item_type} id={item_id}")
+                    telegram.send("❌ Failed to approve - item not found")
+                    return {"ok": True}
 
-            # Re-monitor the item to allow download
-            data["monitored"] = True
+                data = res.json()
+                title = data.get("title", "item")
 
-            # Update item
-            update_res = mgr.client.put(f"{item_type}/{item_id}", json=data)
-            if not update_res:
-                logger.error(f"[TG-MANUAL] Failed to update {item_type} id={item_id}")
-                telegram.send("❌ Failed to approve - update failed")
-                return {"ok": True}
+                # Re-monitor the item to allow download
+                data["monitored"] = True
 
-            # Trigger search
+                # Update item
+                update_res = mgr.client.put(f"{item_type}/{item_id}", json=data)
+                if not update_res:
+                    logger.error(f"[TG-MANUAL] Failed to update {item_type} id={item_id}")
+                    telegram.send("❌ Failed to approve - update failed")
+                    return {"ok": True}
+
+            # Trigger search (outside lock - command endpoint is fire-and-forget)
             search_command = COMMAND_MOVIES_SEARCH if item_type == "movie" else COMMAND_SERIES_SEARCH
             cmd_res = mgr.client.post("command", json={
                 "name": search_command,

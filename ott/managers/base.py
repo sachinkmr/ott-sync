@@ -730,7 +730,11 @@ class OTTBaseManager(ABC):
                 logger.info(f"[MANUAL-MODE] Item has override tag (approved), skipping")
                 return
             
-            # For Grab events: Remove from queue but don't send duplicate notification
+            # For Grab events on already-notified items: cancel queue without
+            # re-notifying. Grab-before-Add ordering (rare but possible when
+            # webhooks race) falls through to the full flow below - it will
+            # cancel the queue AND send the notification, so the user still
+            # gets prompted for approval.
             if event == "Grab" and self.processed_tag in current_tags:
                 logger.info(f"[MANUAL-MODE] Grab event for already-notified item - removing from queue only")
                 self._cancel_queue_items_for(item_id)
@@ -813,7 +817,12 @@ class OTTBaseManager(ABC):
             if not notification_success:
                 logger.error(f"[MANUAL-MODE] Telegram notification failed for id={item_id}")
             
-            # 8. Mark as processed
+            # 8. Mark as processed. Refetch immediately before PUT so that if
+            # the approve callback runs concurrently, its monitored=True is
+            # preserved in our PUT body (we copy the full object as fetched
+            # here). The api/telegram.py callbacks also acquire the same
+            # _get_item_lock as this webhook path, so in practice the callback
+            # waits for us to finish - this refetch is belt-and-braces.
             res = self.client.get(f"{self.item_type()}/{item_id}")
             if res:
                 data = res.json()
