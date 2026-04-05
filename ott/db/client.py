@@ -112,10 +112,14 @@ class DatabaseClient:
     @contextmanager
     def session(self) -> Generator[Session, None, None]:
         """Context manager for database sessions
-        
+
+        Callers own the transaction: call session.commit() explicitly
+        when writes complete. The context manager only handles rollback
+        on exception and cleanup on exit, so read-only blocks cost nothing.
+
         Yields:
             SQLAlchemy session
-            
+
         Example:
             with db.session() as session:
                 session.add(obj)
@@ -123,11 +127,10 @@ class DatabaseClient:
         """
         if not self._initialized:
             self.initialize()
-        
+
         session = self._session_factory()
         try:
             yield session
-            session.commit()
         except Exception:
             session.rollback()
             raise
