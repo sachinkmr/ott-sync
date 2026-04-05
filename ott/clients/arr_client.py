@@ -1,11 +1,17 @@
 """HTTP client for Radarr/Sonarr (*arr) APIs"""
 
 import logging
+import time
 from typing import Any, Optional
 
 import requests
 
 logger = logging.getLogger("ott-hooks")
+
+# Status codes worth retrying - transient server/infrastructure issues
+_RETRYABLE_STATUS = {429, 502, 503, 504}
+# Exponential backoff delays in seconds: 1s, 2s, 4s. Capped at 3 attempts.
+_RETRY_DELAYS = (1.0, 2.0, 4.0)
 
 
 class ArrClient:
@@ -129,40 +135,64 @@ class ArrClient:
         return res is not None
     
     def _request(
-        self, 
-        method: str, 
-        endpoint: str, 
-        **kwargs
+        self,
+        method: str,
+        endpoint: str,
+        **kwargs,
     ) -> Optional[requests.Response]:
-        """Internal method for making HTTP requests
-        
+        """Internal method for making HTTP requests with retry/backoff.
+
+        Transient failures (connection errors, timeouts, 429/502/503/504)
+        are retried up to 3 times with exponential backoff (1s, 2s, 4s).
+        Other HTTP errors (4xx except 429) and unexpected responses are
+        returned/logged immediately.
+
         Args:
             method: HTTP method (GET, POST, PUT, DELETE)
             endpoint: API endpoint (without /api/v3 prefix)
             **kwargs: Additional arguments passed to requests
-        
+
         Returns:
             Response object if successful, None if failed
         """
-        # Build full URL
         url = f"{self.url}/api/v3/{endpoint}"
-        
-        # Set default timeout if not provided
         if "timeout" not in kwargs:
             kwargs["timeout"] = self.timeout
-        
-        try:
-            res = self._session.request(method, url, **kwargs)
-            
-            if not res.ok:
-                logger.error(
-                    f"[HTTP] {method} {endpoint} failed → "
-                    f"{res.status_code} {res.text[:200]}"
+
+        last_error: Optional[str] = None
+        for attempt, delay in enumerate(_RETRY_DELAYS, start=1):
+            try:
+                res = self._session.request(method, url, **kwargs)
+            except requests.RequestException as e:
+                last_error = str(e)
+                if attempt == len(_RETRY_DELAYS):
+                    logger.error(
+                        f"[HTTP] {method} {endpoint} request failed after "
+                        f"{attempt} attempts: {e}"
+                    )
+                    return None
+                logger.warning(
+                    f"[HTTP] {method} {endpoint} attempt {attempt} failed "
+                    f"({e}); retrying in {delay}s"
                 )
-                return None
-            
-            return res
-            
-        except requests.RequestException as e:
-            logger.error(f"[HTTP] {method} {endpoint} request failed: {e}")
+                time.sleep(delay)
+                continue
+
+            if res.ok:
+                return res
+
+            if res.status_code in _RETRYABLE_STATUS and attempt < len(_RETRY_DELAYS):
+                logger.warning(
+                    f"[HTTP] {method} {endpoint} attempt {attempt} got "
+                    f"{res.status_code}; retrying in {delay}s"
+                )
+                time.sleep(delay)
+                continue
+
+            logger.error(
+                f"[HTTP] {method} {endpoint} failed → "
+                f"{res.status_code} {res.text[:200]}"
+            )
             return None
+
+        return None
