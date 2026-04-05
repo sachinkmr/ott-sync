@@ -67,15 +67,66 @@ class ArrClient:
     
     def delete(self, endpoint: str, **kwargs) -> Optional[requests.Response]:
         """Perform safe DELETE request
-        
+
         Args:
             endpoint: API endpoint
             **kwargs: Additional arguments passed to requests
-        
+
         Returns:
             Response object if successful, None if failed
         """
         return self._request("DELETE", endpoint, **kwargs)
+
+    def get_queue(self, page_size: int = 1000) -> list[dict[str, Any]]:
+        """Fetch current download-client queue records.
+
+        Both Radarr and Sonarr return {page, pageSize, totalRecords, records:[...]}.
+        Home deployments rarely exceed a few dozen queued items, so a single
+        large-page fetch is sufficient.
+
+        Args:
+            page_size: Maximum records to retrieve in one call.
+
+        Returns:
+            List of queue record dicts. Each record has an 'id' (queue-record id)
+            plus 'movieId' (Radarr) or 'seriesId'/'episodeId' (Sonarr). Returns
+            an empty list when the request fails.
+        """
+        res = self.get("queue", params={"pageSize": page_size})
+        if not res:
+            return []
+        body = res.json()
+        return body.get("records", []) if isinstance(body, dict) else []
+
+    def delete_queue_item(
+        self,
+        queue_id: int,
+        remove_from_client: bool = True,
+        blocklist: bool = False,
+    ) -> bool:
+        """Delete a specific queue record by its id.
+
+        Targets DELETE /api/v3/queue/{id} with explicit blocklist=false by
+        default so releases are NOT blocklisted - a blocklisted release will
+        not be re-grabbed later even if OTT availability changes.
+
+        Args:
+            queue_id: The queue-record id (the 'id' field in GET /queue records).
+            remove_from_client: Also remove the download from the download client.
+            blocklist: Blocklist the release so it cannot be re-grabbed. Leave
+                False unless the caller explicitly wants to blocklist.
+
+        Returns:
+            True if the queue record was deleted, False otherwise.
+        """
+        res = self.delete(
+            f"queue/{queue_id}",
+            params={
+                "removeFromClient": str(remove_from_client).lower(),
+                "blocklist": str(blocklist).lower(),
+            },
+        )
+        return res is not None
     
     def _request(
         self, 

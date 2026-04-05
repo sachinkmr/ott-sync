@@ -519,6 +519,56 @@ class OTTBaseManager(ABC):
             or item.get("source", {}).get("user") if isinstance(item.get("source"), dict) else None
         )
 
+    def _cancel_queue_items_for(self, item_id: int) -> int:
+        """Cancel any queued downloads for the given *arr item.
+
+        *arr queue DELETE requires the queue-record id (not movieId/seriesId),
+        so we fetch the queue, filter by item_id, and delete each matching
+        record. For Sonarr series this cancels ALL queued episodes of the
+        series. blocklist=false is enforced so releases remain re-grabbable.
+
+        Non-fatal: failures are logged but never raised.
+
+        Args:
+            item_id: Radarr movie id or Sonarr series id.
+
+        Returns:
+            Number of queue records successfully deleted.
+        """
+        id_field = f"{self.item_type()}Id"  # "movieId" or "seriesId"
+        try:
+            records = self.client.get_queue()
+        except Exception as e:
+            logger.error(f"[QUEUE] Failed to fetch queue for id={item_id}: {e}")
+            return 0
+
+        matching_ids = [r["id"] for r in records if r.get(id_field) == item_id]
+        if not matching_ids:
+            return 0
+
+        # Also fire CancelPendingDownloads command so *arr releases any reserved
+        # slot - the queue DELETE removes the record but the search/grab command
+        # may still be in flight.
+        try:
+            self.client.post("command", json={
+                "name": "CancelPendingDownloads",
+                f"{self.item_type()}Ids": [item_id],
+            })
+        except Exception as e:
+            logger.warning(f"[QUEUE] CancelPendingDownloads failed for id={item_id}: {e}")
+
+        cancelled = 0
+        for queue_id in matching_ids:
+            if self.client.delete_queue_item(queue_id, remove_from_client=True, blocklist=False):
+                cancelled += 1
+
+        if cancelled:
+            logger.info(
+                f"[QUEUE] Cancelled {cancelled} queue item(s) for "
+                f"{self.item_type()} id={item_id}"
+            )
+        return cancelled
+
     # -------------------- Enforcement --------------------
     def enforce_block(self, item_id: int, delete_files: bool = True) -> None:
         """Block item from downloading
@@ -536,17 +586,8 @@ class OTTBaseManager(ABC):
         """
         logger.warning(f"[ACTION] Blocking {self.item_type()} id={item_id}")
 
-        # Cancel pending downloads
-        self.client.post("command", json={
-            "name": "CancelPendingDownloads",
-            f"{self.item_type()}Ids": [item_id],
-        })
-
-        # Remove from download queue
-        self.client.delete("queue", params={
-            f"{self.item_type()}Id": item_id,
-            "removeFromClient": True,
-        })
+        # Cancel any queued downloads (uses queue-record ids, blocklist=false)
+        self._cancel_queue_items_for(item_id)
 
         # Get current item state
         res = self.client.get(f"{self.item_type()}/{item_id}")
@@ -692,14 +733,7 @@ class OTTBaseManager(ABC):
             # For Grab events: Remove from queue but don't send duplicate notification
             if event == "Grab" and self.processed_tag in current_tags:
                 logger.info(f"[MANUAL-MODE] Grab event for already-notified item - removing from queue only")
-                self.client.post("command", json={
-                    "name": "CancelPendingDownloads",
-                    f"{self.item_type()}Ids": [item_id],
-                })
-                self.client.delete("queue", params={
-                    f"{self.item_type()}Id": item_id,
-                    "removeFromClient": True,
-                })
+                self._cancel_queue_items_for(item_id)
                 return
             
             # Skip if already processed (notification already sent for Add events)
@@ -718,14 +752,7 @@ class OTTBaseManager(ABC):
             
             # 2. Remove from download queue if already added
             logger.info(f"[MANUAL-MODE] Removing from download queue if present")
-            self.client.post("command", json={
-                "name": "CancelPendingDownloads",
-                f"{self.item_type()}Ids": [item_id],
-            })
-            self.client.delete("queue", params={
-                f"{self.item_type()}Id": item_id,
-                "removeFromClient": True,
-            })
+            self._cancel_queue_items_for(item_id)
             
             # 3. Fetch ratings from all sources
             ratings = self._fetch_ratings(item)
