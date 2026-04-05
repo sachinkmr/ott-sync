@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from ott.config import Config
+from ott.exceptions import ConfigurationError
 
 
 def test_config_initialization(sample_config_dict):
@@ -75,7 +76,7 @@ def test_config_missing_required_keys(tmp_path):
     config_file = tmp_path / "incomplete.json"
     config_file.write_text(json.dumps(incomplete_config))
     
-    with pytest.raises(KeyError, match="Missing required config keys"):
+    with pytest.raises(ConfigurationError, match="Missing required config keys"):
         Config.load(config_file)
 
 

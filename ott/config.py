@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from .exceptions import ConfigurationError
+
 logger = logging.getLogger("ott-hooks")
 
 
@@ -166,15 +168,91 @@ class Config:
     
     def get(self, key: str, default: Any = None) -> Any:
         """Get config value by key (for backwards compatibility)
-        
+
         Args:
             key: Configuration key
             default: Default value if key not found
-            
+
         Returns:
             Configuration value or default
         """
         return self._raw_config.get(key, default)
+
+    def validate(self) -> None:
+        """Cross-field sanity checks on the loaded configuration.
+
+        Catches misconfigurations that would otherwise fail at runtime
+        with cryptic errors (bad URLs, zero/negative intervals, empty
+        provider lists, etc.). Raises ConfigurationError with a clear
+        message describing the first problem found.
+        """
+        errors: list[str] = []
+
+        # URLs must be HTTP(S)
+        for field_name, url in [
+            ("radarr_url", self.radarr_url),
+            ("sonarr_url", self.sonarr_url),
+        ]:
+            if not url or not isinstance(url, str):
+                errors.append(f"{field_name} is required (non-empty string)")
+                continue
+            if not (url.startswith("http://") or url.startswith("https://")):
+                errors.append(
+                    f"{field_name} must start with http:// or https:// (got {url!r})"
+                )
+
+        # API keys must be non-empty
+        for field_name, key in [
+            ("radarr_api_key", self.radarr_api_key),
+            ("sonarr_api_key", self.sonarr_api_key),
+        ]:
+            if not key or not isinstance(key, str):
+                errors.append(f"{field_name} is required (non-empty string)")
+
+        # Provider list non-empty
+        if not self.ott_providers:
+            errors.append("ott_providers must contain at least one provider")
+
+        # Region - accept 2-letter ISO 3166-1 or anything reasonable-looking
+        if not self.region or not isinstance(self.region, str) or len(self.region) < 2:
+            errors.append(f"region must be a non-empty code (got {self.region!r})")
+
+        # Positive intervals
+        positive_int_fields = {
+            "cron_interval_hours": self.cron_interval_hours,
+            "justwatch_rate_limit_calls": self.justwatch_rate_limit_calls,
+            "justwatch_rate_limit_period": self.justwatch_rate_limit_period,
+            "cache_ttl_found_days": self.cache_ttl_found_days,
+            "cache_ttl_not_found_hours": self.cache_ttl_not_found_hours,
+            "cache_max_size_mb": self.cache_max_size_mb,
+            "metrics_retention_days": self.metrics_retention_days,
+            "max_concurrent_webhooks": self.max_concurrent_webhooks,
+            "max_concurrent_justwatch_calls": self.max_concurrent_justwatch_calls,
+        }
+        for name, value in positive_int_fields.items():
+            if not isinstance(value, int) or value <= 0:
+                errors.append(f"{name} must be a positive integer (got {value!r})")
+
+        # Non-negative intervals
+        non_negative_fields = {
+            "cron_initial_delay_seconds": self.cron_initial_delay_seconds,
+            "verification_delay_seconds": self.verification_delay_seconds,
+        }
+        for name, value in non_negative_fields.items():
+            if not isinstance(value, int) or value < 0:
+                errors.append(f"{name} must be >= 0 (got {value!r})")
+
+        # Backup interval only when backup enabled
+        if self.database_backup_enabled and self.database_backup_interval_hours <= 0:
+            errors.append(
+                "database_backup_interval_hours must be > 0 when "
+                "database_backup_enabled is true"
+            )
+
+        if errors:
+            raise ConfigurationError(
+                "Configuration validation failed:\n  - " + "\n  - ".join(errors)
+            )
     
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -209,11 +287,14 @@ class Config:
         
         missing_keys = [key for key in required_keys if key not in config_dict]
         if missing_keys:
-            raise KeyError(f"Missing required config keys: {missing_keys}")
-        
+            raise ConfigurationError(f"Missing required config keys: {missing_keys}")
+
         # Create config instance
         config = cls(config_dict)
-        
+
+        # Cross-field validation
+        config.validate()
+
         # Validate anime detection if enabled
         if config.anime_detection and config.anime_detection.enabled:
             try:
@@ -221,8 +302,8 @@ class Config:
                 logger.info("✅ Anime detection enabled and validated")
             except ValueError as e:
                 logger.error(f"❌ Anime detection config invalid: {e}")
-                raise
-        
+                raise ConfigurationError(f"anime_detection invalid: {e}") from e
+
         logger.info("Config loaded successfully")
         return config
     
