@@ -185,6 +185,9 @@ def main():
         sys.exit(1)
     
     # ========== Initialize Database (v2.0.0) ==========
+    # Fail-fast: get_db() is called from repositories, metrics, cache invalidation,
+    # override history, and webhook idempotency. A missing DB makes half the app
+    # crash at the first webhook. Exit early with a clear message instead.
     logger.info("📊 Initializing database...")
     try:
         from ott.db.client import initialize_database
@@ -193,7 +196,7 @@ def main():
             enable_wal=config.database_enable_wal
         )
         logger.info(f"  ✓ Database initialized: {config.database_path}")
-        
+
         # Run health check
         health = db.health_check()
         if health["status"] == "healthy":
@@ -201,10 +204,17 @@ def main():
         else:
             logger.warning(f"  ⚠ Database health check: {health.get('error', 'Unknown issue')}")
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}", exc_info=True)
-        logger.warning("  ⚠ Continuing without database - features will be limited")
+        logger.error(f"Failed to initialize database at {config.database_path}: {e}", exc_info=True)
+        logger.error(
+            "  Database is required. Check that the path is writable, the disk "
+            "has space, and no other process holds the file exclusively."
+        )
+        sys.exit(1)
     
     # ========== Initialize Cache (v2.0.0) ==========
+    # Cache is a pure performance enhancement layered on top of the DB. When
+    # it fails, register_cache_routes is simply skipped and managers fall back
+    # to live JustWatch lookups - slower, but functionally complete.
     _justwatch_cache = None
     if config.cache_enabled:
         logger.info("💾 Initializing JustWatch cache...")
@@ -218,7 +228,7 @@ def main():
             logger.info(f"  ✓ Cache enabled (TTL: {config.cache_ttl_found_days}d found, {config.cache_ttl_not_found_hours}h not found)")
         except Exception as e:
             logger.error(f"Failed to initialize cache: {e}", exc_info=True)
-            logger.warning("  ⚠ Continuing without cache - performance may be impacted")
+            logger.warning("  ⚠ Cache disabled - every JustWatch lookup will hit the network")
             _justwatch_cache = None
     else:
         logger.info("💾 Cache disabled by configuration")
