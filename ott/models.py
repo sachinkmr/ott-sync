@@ -24,12 +24,11 @@ def build_telegram_caption(
     item_id: int,
     requested_by: str | None = None,
     tmdb_rating: float | None = None,
-    imdb_rating: float | None = None,
     anilist_rating: float | None = None,
     manual_mode: bool = False,
 ) -> str:
     """Build a Telegram notification caption for an OTT-available item
-    
+
     Args:
         title: Movie or series title
         year: Release year (optional)
@@ -39,21 +38,18 @@ def build_telegram_caption(
         item_id: Radarr/Sonarr item ID
         requested_by: Name of user who requested the item (optional)
         tmdb_rating: TMDb rating (0-10 scale, optional)
-        imdb_rating: IMDb rating (0-10 scale, optional)
         anilist_rating: AniList rating (0-10 scale, optional)
         manual_mode: If True, shows manual approval message instead of OTT block message
-    
+
     Returns:
         Formatted caption string with Markdown formatting
     """
     ts = datetime.now().strftime("%d %b %Y, %H:%M")
-    
+
     # Build ratings section
     ratings_parts = []
     if tmdb_rating:
         ratings_parts.append(f"⭐ TMDb: {tmdb_rating:.1f}/10")
-    if imdb_rating:
-        ratings_parts.append(f"⭐ IMDb: {imdb_rating:.1f}/10")
     if anilist_rating:
         ratings_parts.append(f"⭐ AniList: {anilist_rating:.1f}/10")
     

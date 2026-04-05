@@ -467,55 +467,37 @@ class OTTBaseManager(ABC):
         return users
     
     def _fetch_ratings(self, item: dict[str, Any]) -> dict[str, float | None]:
-        """Fetch ratings from various sources (TMDb, IMDb, AniList)
-        
+        """Fetch ratings from available sources (TMDb, AniList).
+
+        IMDb is not supported - TMDb exposes the imdb_id but not the score,
+        which would require a separate OMDb API integration (deferred).
+
         Args:
             item: Item data from webhook payload
-            
+
         Returns:
-            Dict with ratings: {"tmdb": 8.5, "imdb": 7.9, "anilist": 8.2} or None values
+            Dict of source -> rating (0-10 scale): {"tmdb": 8.5, "anilist": 8.2}.
+            Keys are always present; values are None when the fetch failed or
+            the source is not applicable.
         """
-        ratings = {
-            "tmdb": None,
-            "imdb": None,
-            "anilist": None
-        }
-        
+        ratings: dict[str, float | None] = {"tmdb": None, "anilist": None}
+
         tmdb_id = item.get("tmdbId")
-        
+
         # Fetch TMDb ratings
         if self.tmdb_client and tmdb_id:
             try:
                 if self.item_type() == "movie":
                     tmdb_data = self.tmdb_client.get_movie_ratings(tmdb_id)
-                    if tmdb_data:
-                        ratings["tmdb"] = tmdb_data.get("tmdb")
-                        imdb_id = tmdb_data.get("imdb_id")
-                        
-                        # Try to fetch IMDb rating (would need additional API or scraping)
-                        # For now, we'll use TMDb's rating as a proxy
-                        # In the future, you could integrate with OMDb API or similar
                 else:  # series
                     tmdb_data = self.tmdb_client.get_series_ratings(tmdb_id)
-                    if tmdb_data:
-                        ratings["tmdb"] = tmdb_data.get("tmdb")
+                if tmdb_data:
+                    ratings["tmdb"] = tmdb_data.get("tmdb")
             except Exception as e:
                 logger.error(f"[RATINGS] TMDb fetch error: {e}")
-        
-        # Fetch AniList ratings (for anime)
-        # This would require detecting if it's anime and having the AniList ID
-        # For now, we'll skip this unless anime detection is enabled
-        if self.anilist_client:
-            try:
-                # Check if item has anime-detected tag
-                tags = set(item.get("tags", []))
-                if self.anime_detected_tag in tags:
-                    # Would need AniList ID from somewhere (anime_detector)
-                    # This is a placeholder - actual implementation depends on your anime detection setup
-                    pass
-            except Exception as e:
-                logger.error(f"[RATINGS] AniList fetch error: {e}")
-        
+
+        # AniList ratings are only available when we know the AniList ID, which
+        # we don't expose from the anime_detector yet. Phase 7.3 will wire this.
         return ratings
     
     def _extract_plex_user(self, item: dict[str, Any]) -> str | None:
@@ -785,7 +767,6 @@ class OTTBaseManager(ABC):
                 item_id=item_id,
                 requested_by=requested_by,
                 tmdb_rating=ratings.get("tmdb"),
-                imdb_rating=ratings.get("imdb"),
                 anilist_rating=ratings.get("anilist"),
                 manual_mode=True,
             )
@@ -909,7 +890,6 @@ class OTTBaseManager(ABC):
                 item_id=item_id,
                 requested_by=requested_by,
                 tmdb_rating=ratings.get("tmdb"),
-                imdb_rating=ratings.get("imdb"),
                 anilist_rating=ratings.get("anilist"),
                 manual_mode=False,
             )
@@ -933,8 +913,6 @@ class OTTBaseManager(ABC):
                 ratings_parts = []
                 if ratings.get("tmdb"):
                     ratings_parts.append(f"⭐ TMDb: {ratings['tmdb']:.1f}/10")
-                if ratings.get("imdb"):
-                    ratings_parts.append(f"⭐ IMDb: {ratings['imdb']:.1f}/10")
                 if ratings.get("anilist"):
                     ratings_parts.append(f"⭐ AniList: {ratings['anilist']:.1f}/10")
                 
