@@ -97,16 +97,10 @@ class Config:
         # OTT providers
         self.ott_providers: list[str] = config_dict["ott_providers"]
         
-        # Telegram configuration
-        telegram_config = config_dict.get("telegram", {})
-        self.telegram = type('TelegramConfig', (), {
-            'enabled': telegram_config.get("enabled", True),
-            'bot_token': telegram_config.get("bot_token", ""),
-            'chat_id': telegram_config.get("chat_id", ""),
-            'admin_chat_id': telegram_config.get("admin_chat_id", ""),
-            'region': telegram_config.get("region", "India"),
-        })()
-        
+        # Telegram configuration (dict-form, consumed by TelegramNotifier)
+        self.telegram: dict[str, Any] = config_dict.get("telegram", {})
+        self.telegram_admin_chat_id: Optional[str] = self.telegram.get("admin_chat_id")
+
         # Region
         self.region: str = config_dict.get("region", "IN")
         
@@ -158,36 +152,10 @@ class Config:
         else:
             self.anime_detection = None
         
-        # Store raw config for backward compatibility
-        self._raw_config = config_dict
-        self.telegram: dict[str, Any] = config_dict.get("telegram", {})
-        self.telegram_admin_chat_id: Optional[str] = self.telegram.get("admin_chat_id")
-        
-        # Cron configuration
-        self.cron_initial_delay_seconds: int = config_dict.get("cron_initial_delay_seconds", 60)
-        self.cron_interval_hours: int = config_dict.get("cron_interval_hours", 24)
-        
-        # Region for JustWatch
-        self.region: str = config_dict.get("region", "IN")
-        
-        # JustWatch rate limiting
-        rate_limit_config = config_dict.get("justwatch_rate_limit", {})
-        self.justwatch_rate_limit_calls: int = rate_limit_config.get("max_calls", 60)
-        self.justwatch_rate_limit_period: int = rate_limit_config.get("period_seconds", 60)
-        
-        # Delayed verification to catch race conditions (seconds)
-        self.verification_delay_seconds: int = config_dict.get("verification_delay_seconds", 60)
-        
         # Auto download mode (True = automatic, False = manual approval required)
         self.auto_download: bool = config_dict.get("auto_download", False)
-        
-        # Anime detection configuration
-        anime_config_dict = config_dict.get("anime_detection", {})
-        self.anime_detection: Optional[AnimeDetectionConfig] = None
-        if anime_config_dict:
-            self.anime_detection = AnimeDetectionConfig(anime_config_dict)
-        
-        # Store full config for compatibility
+
+        # Store raw config for backward compatibility
         self._raw_config = config_dict
     
     def get(self, key: str, default: Any = None) -> Any:
