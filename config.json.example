@@ -10,7 +10,7 @@
   "_comment_ott_providers": "List of OTT providers to check (case-sensitive, must match JustWatch provider names)",
   "ott_providers": ["Netflix", "Prime Video", "Disney Plus Hotstar"],
   
-  "_comment_telegram": "Telegram bot configuration for notifications and interactive buttons",
+  "_comment_telegram": "Telegram bot configuration for notifications and interactive buttons. chat_id receives all normal alerts; admin_chat_id (optional) receives anime-maybe confirmation prompts only - leave empty to route them to chat_id instead.",
   "telegram": {
     "enabled": true,
     "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
