@@ -33,27 +33,36 @@ class TelegramNotifier:
             )
             self.enabled = False
 
-    def send(self, message: str, buttons: list[list[dict]] | None = None) -> bool:
+    def send(
+        self,
+        message: str,
+        buttons: list[list[dict]] | None = None,
+        chat_id: str | int | None = None,
+    ) -> bool:
         """Send text message to Telegram
-        
+
         Args:
             message: Message text (supports Markdown formatting)
             buttons: Optional inline keyboard buttons
                 Format: [[{"text": "Label", "callback_data": "data"}]]
-        
+            chat_id: Optional target chat id. Falls back to the notifier's
+                default chat_id (set at construction) when omitted. Use this
+                to route admin alerts to a separate chat.
+
         Returns:
             True if message sent successfully, False otherwise
         """
         if not self.enabled:
             logger.debug("[TG] Telegram disabled, skipping message")
             return False
-            
-        if not self.token or not self.chat_id:
+
+        target_chat = chat_id if chat_id else self.chat_id
+        if not self.token or not target_chat:
             logger.error("[TG] Missing bot_token or chat_id")
             return False
 
         payload = {
-            "chat_id": self.chat_id,
+            "chat_id": target_chat,
             "text": message,
             "parse_mode": "Markdown",
         }
@@ -80,32 +89,36 @@ class TelegramNotifier:
             return False
             
     def send_photo(
-        self, 
-        photo_url: str, 
-        caption: str, 
-        buttons: list[list[dict]] | None = None
+        self,
+        photo_url: str,
+        caption: str,
+        buttons: list[list[dict]] | None = None,
+        chat_id: str | int | None = None,
     ) -> bool:
         """Send photo with caption to Telegram
-        
+
         Args:
             photo_url: URL of the photo to send
             caption: Photo caption (supports Markdown formatting)
             buttons: Optional inline keyboard buttons
                 Format: [[{"text": "Label", "callback_data": "data"}]]
-        
+            chat_id: Optional target chat id. Falls back to the notifier's
+                default chat_id (set at construction) when omitted.
+
         Returns:
             True if photo sent successfully, False otherwise
         """
         if not self.enabled:
             logger.debug("[TG] Telegram disabled, skipping photo")
             return False
-            
-        if not self.token or not self.chat_id:
+
+        target_chat = chat_id if chat_id else self.chat_id
+        if not self.token or not target_chat:
             logger.error("[TG] Missing bot_token or chat_id")
             return False
 
         payload = {
-            "chat_id": self.chat_id,
+            "chat_id": target_chat,
             "photo": photo_url,
             "caption": caption,
             "parse_mode": "Markdown",
