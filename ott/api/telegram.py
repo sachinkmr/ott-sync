@@ -5,6 +5,7 @@ from typing import Callable
 from fastapi import Request
 
 from .app import app
+from .models import parse_callback_action
 from ..constants import COMMAND_MOVIES_SEARCH, COMMAND_SERIES_SEARCH
 
 logger = logging.getLogger("ott-hooks")
@@ -40,14 +41,14 @@ def register_telegram_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable,
         # Anime Callbacks
         # ─────────────────────────────────────────────
         if callback_data.startswith("anime:"):
-            try:
-                _, action, series_id = callback_data.split(":")
-                series_id = int(series_id)
-            except (ValueError, IndexError) as e:
-                logger.error(f"[TG-ANIME] Invalid callback data: {callback_data} - {e}")
+            parsed = parse_callback_action(callback_data)
+            if not parsed:
+                logger.error(f"[TG-ANIME] Invalid callback data: {callback_data!r}")
                 telegram.send("❌ Invalid callback data")
                 return {"ok": True}
-            
+            action = parsed.target
+            series_id = parsed.item_id
+
             mgr = get_sonarr_mgr()
             
             # Fetch series data
@@ -123,13 +124,13 @@ def register_telegram_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable,
         # ─────────────────────────────────────────────
         if callback_data.startswith("override:"):
             # Parse callback data: "override:movie:123" or "override:series:456"
-            try:
-                _, item_type, item_id = callback_data.split(":")
-                item_id = int(item_id)
-            except (ValueError, IndexError) as e:
-                logger.error(f"[TG] Invalid callback data format: {callback_data} - {e}")
+            parsed = parse_callback_action(callback_data)
+            if not parsed or parsed.target not in ("movie", "series"):
+                logger.error(f"[TG] Invalid callback data format: {callback_data!r}")
                 telegram.send("❌ Invalid callback data")
                 return {"ok": True}
+            item_type = parsed.target
+            item_id = parsed.item_id
 
             # Select appropriate manager
             mgr = get_radarr_mgr() if item_type == "movie" else get_sonarr_mgr()
@@ -197,13 +198,13 @@ def register_telegram_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable,
         # ─────────────────────────────────────────────
         if callback_data.startswith("approve:"):
             # Parse callback data: "approve:movie:123" or "approve:series:456"
-            try:
-                _, item_type, item_id = callback_data.split(":")
-                item_id = int(item_id)
-            except (ValueError, IndexError) as e:
-                logger.error(f"[TG-MANUAL] Invalid callback data format: {callback_data} - {e}")
+            parsed = parse_callback_action(callback_data)
+            if not parsed or parsed.target not in ("movie", "series"):
+                logger.error(f"[TG-MANUAL] Invalid callback data format: {callback_data!r}")
                 telegram.send("❌ Invalid callback data")
                 return {"ok": True}
+            item_type = parsed.target
+            item_id = parsed.item_id
 
             # Select appropriate manager
             mgr = get_radarr_mgr() if item_type == "movie" else get_sonarr_mgr()

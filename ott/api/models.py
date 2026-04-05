@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 
 # ==================== Webhook Payloads ====================
@@ -51,6 +51,44 @@ class TelegramCallbackPayload(BaseModel):
     """Telegram callback query structure"""
     callback_query: dict
     message: Optional[dict] = None
+
+
+class TelegramCallbackAction(BaseModel):
+    """Parsed Telegram inline-keyboard callback data.
+
+    All our callback_data strings follow 'verb:target:id' where:
+      - verb is the action family (override, approve, anime)
+      - target is the item_type (movie/series) or sub-action (confirm/reject)
+      - id is a positive integer item/series id
+
+    Use parse_callback_action() to get a validated instance from a raw string.
+    """
+    action: str = Field(min_length=1, max_length=32)
+    target: str = Field(min_length=1, max_length=32)
+    item_id: int = Field(ge=0)
+
+
+def parse_callback_action(callback_data: str) -> Optional[TelegramCallbackAction]:
+    """Parse and validate a telegram callback_data string.
+
+    Returns a validated TelegramCallbackAction or None if the string does not
+    match the 'verb:target:id' shape or the id is not a non-negative integer.
+    Callers should check for None and return a user-visible error, not trust
+    the shape of the input.
+    """
+    if not callback_data:
+        return None
+    parts = callback_data.split(":", 2)
+    if len(parts) != 3:
+        return None
+    try:
+        return TelegramCallbackAction(
+            action=parts[0],
+            target=parts[1],
+            item_id=int(parts[2]),
+        )
+    except (ValueError, ValidationError):
+        return None
 
 
 # ==================== Response Models ====================
