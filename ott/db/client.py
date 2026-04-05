@@ -43,6 +43,11 @@ class DatabaseClient:
         self._session_factory: Optional[sessionmaker] = None
         self._lock = threading.Lock()
         self._initialized = False
+        self._closing = False
+        # Count of sessions currently checked out; used by close() to wait
+        # for in-flight work to complete before disposing the engine.
+        self._active_sessions = 0
+        self._active_sessions_lock = threading.Lock()
         
         # Create database directory if it doesn't exist
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -124,10 +129,17 @@ class DatabaseClient:
             with db.session() as session:
                 session.add(obj)
                 session.commit()
+
+        Raises:
+            RuntimeError: if close() is in progress - no new sessions.
         """
+        if self._closing:
+            raise RuntimeError("Database is shutting down; no new sessions")
         if not self._initialized:
             self.initialize()
 
+        with self._active_sessions_lock:
+            self._active_sessions += 1
         session = self._session_factory()
         try:
             yield session
@@ -136,6 +148,8 @@ class DatabaseClient:
             raise
         finally:
             session.close()
+            with self._active_sessions_lock:
+                self._active_sessions -= 1
     
     def health_check(self) -> dict[str, any]:
         """Perform database health check
@@ -269,13 +283,43 @@ class DatabaseClient:
             logger.error(f"[DB] VACUUM failed: {e}", exc_info=True)
             return False
     
-    def close(self) -> None:
-        """Close database connections gracefully"""
+    def close(self, timeout: float = 30.0) -> None:
+        """Close database connections gracefully.
+
+        Flips _closing so new session() calls raise, polls for in-flight
+        sessions to drain (bounded by timeout), then disposes the engine.
+        Active sessions that exceed the timeout get their connections
+        closed from under them, but we log loudly when that happens.
+
+        Args:
+            timeout: Seconds to wait for in-flight sessions before disposing.
+        """
+        import time
+
         with self._lock:
-            if self._engine:
-                self._engine.dispose()
-                logger.info("[DB] Database connections closed")
-                self._initialized = False
+            if not self._engine:
+                return
+            self._closing = True
+
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._active_sessions_lock:
+                active = self._active_sessions
+            if active == 0:
+                break
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    f"[DB] {active} active session(s) remain after {timeout}s "
+                    "timeout; closing anyway"
+                )
+                break
+            time.sleep(0.1)
+
+        with self._lock:
+            self._engine.dispose()
+            self._initialized = False
+            self._closing = False
+            logger.info("[DB] Database connections closed")
 
 
 # Global database instance (initialized in main.py)
