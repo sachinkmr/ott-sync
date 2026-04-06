@@ -169,12 +169,23 @@ def reload_configuration():
                 **manual_add_kwargs,
             ),
         }
+        # Apply rating-gate config to both managers
+        for mgr in (new_managers['radarr'], new_managers['sonarr']):
+            mgr.rating_gate_enabled = config.rating_gate_enabled
+            mgr.rating_gate_auto_download_pct = config.rating_gate_auto_download_pct
+            mgr.rating_gate_approval_pct = config.rating_gate_approval_pct
+            mgr.rating_gate_min_vote_count = config.rating_gate_min_vote_count
+            mgr.rating_gate_trending_window = config.rating_gate_trending_window
+            mgr.rating_gate_defer_days = config.rating_gate_defer_days
+            mgr.rating_gate_max_defer_attempts = config.rating_gate_max_defer_attempts
+
         _managers = new_managers
 
         logger.info("✓ Configuration reloaded - new settings active for future requests")
         logger.info(f"  - OTT Providers: {len(config.ott_providers)}")
         logger.info(f"  - Telegram: {'enabled' if telegram.enabled else 'disabled'}")
         logger.info(f"  - IMDb Ratings: {'enabled (OMDb)' if omdb_client else 'disabled'}")
+        logger.info(f"  - Rating Gate: {'enabled' if config.rating_gate_enabled else 'disabled'}")
         logger.info(f"  - Region: {config.region}")
         logger.info(f"  - Auto Download: {'enabled' if config.auto_download else 'disabled (manual mode)'}")
         logger.info(f"  - Anime Detection: {'enabled' if anime_detector else 'disabled'}")
@@ -376,7 +387,17 @@ def main():
         anime_config=anime_config_dict,
         **manual_add_kwargs,
     )
-    
+
+    # Apply rating-gate config
+    for mgr in (_managers['radarr'], _managers['sonarr']):
+        mgr.rating_gate_enabled = config.rating_gate_enabled
+        mgr.rating_gate_auto_download_pct = config.rating_gate_auto_download_pct
+        mgr.rating_gate_approval_pct = config.rating_gate_approval_pct
+        mgr.rating_gate_min_vote_count = config.rating_gate_min_vote_count
+        mgr.rating_gate_trending_window = config.rating_gate_trending_window
+        mgr.rating_gate_defer_days = config.rating_gate_defer_days
+        mgr.rating_gate_max_defer_attempts = config.rating_gate_max_defer_attempts
+
     # Run anime migration if enabled
     if anime_detector and config.anime_detection.auto_run_on_startup:
         logger.info("🎌 Running anime migration on startup...")

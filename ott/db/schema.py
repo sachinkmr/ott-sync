@@ -209,3 +209,61 @@ class ErrorLogModel(Base):
         Index('idx_error_severity', 'severity'),
         Index('idx_error_resolved', 'resolved'),
     )
+
+
+# ---------------------------------------------------------------------------
+# Rating-gate tables (Phase 7.1)
+# ---------------------------------------------------------------------------
+
+class PendingEvaluationModel(Base):
+    """Items deferred because they had no trustworthy rating at decision time.
+
+    The weekly cron sweeper re-checks these and promotes them to a terminal
+    decision (AUTO_DOWNLOAD / SKIP / REQUEST_APPROVAL) once a rating appears.
+    """
+    __tablename__ = "pending_evaluation"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    media_type = Column(String(10), nullable=False)     # 'movie' | 'tv'
+    tmdb_id = Column(Integer, nullable=False)
+    arr_type = Column(String(10), nullable=False)       # 'radarr' | 'sonarr'
+    arr_item_id = Column(Integer, nullable=False)
+    title = Column(String(500), nullable=False)
+    first_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    next_check_at = Column(DateTime, nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    last_reason = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index('idx_pending_eval_next', 'next_check_at'),
+        Index('idx_pending_eval_item', 'arr_type', 'arr_item_id'),
+    )
+
+
+class PendingApprovalModel(Base):
+    """Items for which a Telegram approval prompt was sent and not yet resolved.
+
+    Used for dedup (don't re-prompt for the same item) and admin /metrics.
+    No timeout sweeper — approvals wait forever per user spec.
+    """
+    __tablename__ = "pending_approval"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    media_type = Column(String(10), nullable=False)
+    tmdb_id = Column(Integer, nullable=False)
+    arr_type = Column(String(10), nullable=False)
+    arr_item_id = Column(Integer, nullable=False)
+    title = Column(String(500), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+    resolution = Column(String(20), nullable=True)     # 'download' | 'skip'
+    telegram_message_id = Column(Integer, nullable=True)
+    telegram_chat_id = Column(Integer, nullable=True)
+    rating_score_pct = Column(Float, nullable=True)
+    trending = Column(Boolean, nullable=True)
+    reason = Column(Text, nullable=False)
+
+    __table_args__ = (
+        Index('idx_pending_appr_item', 'arr_type', 'arr_item_id'),
+        Index('idx_pending_appr_resolved', 'resolved_at'),
+    )

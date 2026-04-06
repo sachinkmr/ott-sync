@@ -336,3 +336,94 @@ class TMDBClient:
             return None
         
         return {"tmdb": series_data.get("vote_average")}
+
+    # -------------------- Rating gate helpers --------------------
+
+    def get_rating(
+        self,
+        tmdb_id: int,
+        media_type: str = "movie",
+        min_vote_count: int = 50,
+    ) -> Optional[dict]:
+        """Fetch a normalized rating for use by the rating gate.
+
+        Args:
+            tmdb_id: TMDB movie or series ID.
+            media_type: "movie" or "tv".
+            min_vote_count: Minimum vote count to trust the score. Returns
+                None when there are fewer votes than this.
+
+        Returns:
+            {"score_pct": 82.0, "vote_count": 1234, "source": "tmdb"} or None
+            when the lookup fails or the vote count is below threshold.
+        """
+        def _fetch():
+            try:
+                if media_type == "movie":
+                    url = f"{self.BASE_URL}/movie/{tmdb_id}"
+                else:
+                    url = f"{self.BASE_URL}/tv/{tmdb_id}"
+                params = {"api_key": self.api_key}
+                response = self._session.get(url, params=params, timeout=self.timeout)
+                if response.status_code == 429:
+                    raise TMDBRateLimitError("TMDB rate limit exceeded")
+                if not response.ok:
+                    return None
+                data = response.json()
+                vote_avg = data.get("vote_average")
+                vote_count = data.get("vote_count", 0)
+                if vote_avg is None or vote_count < min_vote_count:
+                    return None
+                return {
+                    "score_pct": round(vote_avg * 10, 1),  # 0-10 → 0-100
+                    "vote_count": vote_count,
+                    "source": "tmdb",
+                }
+            except requests.RequestException as e:
+                logger.error(f"[TMDB] get_rating failed for {media_type}/{tmdb_id}: {e}")
+                return None
+
+        try:
+            return self.rate_limiter.execute(_fetch, timeout=self.timeout + 5)
+        except Exception as e:
+            logger.error(f"[TMDB] get_rating error: {e}")
+            return None
+
+    def is_trending(
+        self,
+        tmdb_id: int,
+        media_type: str = "movie",
+        window: str = "week",
+    ) -> bool:
+        """Check if a title is on the TMDB trending list.
+
+        Args:
+            tmdb_id: TMDB movie or series ID.
+            media_type: "movie" or "tv".
+            window: "day" or "week" (TMDB endpoint parameter).
+
+        Returns:
+            True if the title appears in the first page of trending results.
+        """
+        def _fetch():
+            try:
+                url = f"{self.BASE_URL}/trending/{media_type}/{window}"
+                params = {"api_key": self.api_key}
+                response = self._session.get(url, params=params, timeout=self.timeout)
+                if response.status_code == 429:
+                    raise TMDBRateLimitError("TMDB rate limit exceeded")
+                if not response.ok:
+                    return False
+                data = response.json()
+                ids = {item["id"] for item in data.get("results", [])}
+                return tmdb_id in ids
+            except requests.RequestException as e:
+                logger.error(f"[TMDB] is_trending failed: {e}")
+                return False
+
+        try:
+            result = self.rate_limiter.execute(_fetch, timeout=self.timeout + 5)
+            return result if result is not None else False
+        except Exception as e:
+            logger.error(f"[TMDB] is_trending error: {e}")
+            return False

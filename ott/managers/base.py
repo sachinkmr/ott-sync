@@ -77,6 +77,14 @@ class OTTBaseManager(ABC):
         self.tmdb_client = tmdb_client
         self.anilist_client = anilist_client
         self.omdb_client = omdb_client
+        # Rating gate config (defaults match Config defaults; overridden by main.py)
+        self.rating_gate_enabled: bool = False
+        self.rating_gate_auto_download_pct: int = 80
+        self.rating_gate_approval_pct: int = 70
+        self.rating_gate_min_vote_count: int = 50
+        self.rating_gate_trending_window: str = "week"
+        self.rating_gate_defer_days: int = 7
+        self.rating_gate_max_defer_attempts: int = 0
         self.manual_add_detection_enabled = manual_add_detection_enabled
         self.import_list_tags = import_list_tags or []
         self.manual_add_auto_apply_override = manual_add_auto_apply_override
@@ -1180,23 +1188,171 @@ class OTTBaseManager(ABC):
                     data["tags"] = list(set(data.get("tags", [])) | {self.processed_tag})
                     self.client.put(f"{self.item_type()}/{item_id}", json=data)
         else:
-            # ❌ Not on OTT → mark processed and restore monitoring
-            logger.info("[DECISION] Not on OTT → marking processed and restoring monitoring")
-            
-            # 🕒 Update timestamp even for not-found items
+            # ❌ Not on OTT → apply rating gate or mark processed
+            logger.info("[DECISION] Not on OTT → evaluating rating gate")
             self.timestamp_cache.update_check(self.item_type(), item_id)
+
+            self._apply_rating_gate_or_proceed(
+                item=item, item_id=item_id, title=title, year=year,
+                tags=tags, current_tags=current_tags, was_monitored=was_monitored,
+            )
     
+    def _apply_rating_gate_or_proceed(
+        self, *, item: dict, item_id: int, title: str, year: int,
+        tags: set, current_tags: set, was_monitored: bool,
+    ) -> None:
+        """Apply the rating-gate decision (or just mark processed if the gate is off).
+
+        Called from the automatic-mode "not on OTT" branch.
+        """
+        from .decision import Decision, RatingResult, decide
+        from ..db.repositories.rating_gate import (
+            PendingApprovalRepository,
+            PendingEvaluationRepository,
+        )
+
+        tmdb_id = item.get("tmdbId")
+        media_type = self.item_type()  # "movie" or "series"
+        tmdb_media = "movie" if media_type == "movie" else "tv"
+
+        # Fetch structured rating for the gate
+        rating_result = None
+        trending = False
+        if self.tmdb_client and tmdb_id and self.auto_download and self.rating_gate_enabled:
+            raw = self.tmdb_client.get_rating(
+                tmdb_id, tmdb_media,
+                min_vote_count=self.rating_gate_min_vote_count,
+            )
+            if raw:
+                rating_result = RatingResult(
+                    score_pct=raw["score_pct"],
+                    source=raw["source"],
+                    vote_count=raw["vote_count"],
+                )
+            trending = self.tmdb_client.is_trending(
+                tmdb_id, tmdb_media, self.rating_gate_trending_window,
+            )
+
+        result = decide(
+            auto_download=self.auto_download,
+            rating_gate_enabled=self.rating_gate_enabled,
+            rating=rating_result,
+            trending=trending,
+            auto_download_threshold_pct=self.rating_gate_auto_download_pct,
+            approval_threshold_pct=self.rating_gate_approval_pct,
+        )
+
+        logger.info(
+            f"[RATING-GATE] {result.decision.value} for {title} "
+            f"(reason: {result.reason})"
+        )
+
+        if result.decision == Decision.AUTO_DOWNLOAD:
+            # Proceed normally - mark processed, restore monitoring
             if self.processed_tag not in current_tags:
                 res = self.client.get(f"{self.item_type()}/{item_id}")
                 if res:
                     data = res.json()
                     data["tags"] = list(set(data.get("tags", [])) | {self.processed_tag})
-                    # Restore monitoring if it was pre-emptively disabled
                     if was_monitored and not data.get("monitored"):
                         data["monitored"] = True
-                        logger.info(f"[RACE-PROTECTION] Restoring monitoring for id={item_id}")
                     self.client.put(f"{self.item_type()}/{item_id}", json=data)
-    
+
+        elif result.decision == Decision.REQUEST_APPROVAL:
+            # Unmonitor + send Telegram approval + record in DB
+            self._unmonitor_item(item_id)
+            self._add_tag_to_item(item_id, "ott-pending-approval")
+            PendingApprovalRepository.create(
+                media_type=tmdb_media, tmdb_id=tmdb_id or 0,
+                arr_type="radarr" if media_type == "movie" else "sonarr",
+                arr_item_id=item_id, title=title, reason=result.reason,
+                rating_score_pct=result.rating.score_pct if result.rating else None,
+                trending=result.trending,
+            )
+            # Send Telegram with the already-fetched ratings
+            ratings = self._fetch_ratings(item)
+            self._send_approval_notification(
+                item=item, item_id=item_id, title=title, year=year,
+                ratings=ratings, tags=tags, reason=result.reason,
+            )
+
+        elif result.decision == Decision.SKIP_LOW_RATING:
+            # Unmonitor + tag ott-low-rating
+            self._unmonitor_item(item_id)
+            self._add_tag_to_item(item_id, "ott-low-rating")
+            self._add_tag_to_item(item_id, "ott-processed")
+            logger.info(
+                f"[RATING-GATE] Skipped {title} (low rating, not trending)"
+            )
+
+        elif result.decision == Decision.DEFER_NO_RATING:
+            # Unmonitor + tag ott-pending-rating + record in DB
+            self._unmonitor_item(item_id)
+            self._add_tag_to_item(item_id, "ott-pending-rating")
+            PendingEvaluationRepository.create(
+                media_type=tmdb_media, tmdb_id=tmdb_id or 0,
+                arr_type="radarr" if media_type == "movie" else "sonarr",
+                arr_item_id=item_id, title=title,
+                defer_days=self.rating_gate_defer_days,
+                reason=result.reason,
+            )
+            logger.info(
+                f"[RATING-GATE] Deferred {title} "
+                f"(re-check in {self.rating_gate_defer_days} days)"
+            )
+
+    def _unmonitor_item(self, item_id: int) -> None:
+        """Set monitored=False on an item."""
+        res = self.client.get(f"{self.item_type()}/{item_id}")
+        if res:
+            data = res.json()
+            data["monitored"] = False
+            self.client.put(f"{self.item_type()}/{item_id}", json=data)
+
+    def _add_tag_to_item(self, item_id: int, tag_label: str) -> None:
+        """Add a tag (by label) to an item. Creates the tag if needed."""
+        tag_id = self._get_or_create_tag(tag_label)
+        res = self.client.get(f"{self.item_type()}/{item_id}")
+        if res:
+            data = res.json()
+            current_tags = set(data.get("tags", []))
+            if tag_id not in current_tags:
+                current_tags.add(tag_id)
+                data["tags"] = list(current_tags)
+                self.client.put(f"{self.item_type()}/{item_id}", json=data)
+
+    def _send_approval_notification(
+        self, *, item: dict, item_id: int, title: str, year: int,
+        ratings: dict, tags: set, reason: str,
+    ) -> None:
+        """Send a Telegram approval prompt (shared by manual mode and rating gate)."""
+        images = item.get("images", [])
+        poster = next(
+            (img.get("remoteUrl") for img in images if img.get("coverType") == "poster"),
+            None,
+        )
+        plex_users = self._extract_plex_users(list(tags))
+        requested_by = f"{', '.join(plex_users)} (Plex)" if plex_users else "Automated"
+
+        caption = build_telegram_caption(
+            title=title, year=year, provider=None,
+            region=self.telegram.region,
+            item_type=self.item_type(), item_id=item_id,
+            requested_by=requested_by,
+            tmdb_rating=ratings.get("tmdb"),
+            imdb_rating=ratings.get("imdb"),
+            anilist_rating=ratings.get("anilist"),
+            manual_mode=True,
+        )
+        buttons = [[{
+            "text": "✅ Approve Download",
+            "callback_data": f"approve:{self.item_type()}:{item_id}",
+        }]]
+        if poster:
+            self.telegram.send_photo(poster, caption, buttons=buttons)
+        else:
+            self.telegram.send(caption, buttons=buttons)
+
     # -------------------- Cron --------------------
     def cron_cleanup(self) -> ProcessingMetrics:
         """Scheduled cleanup - check all monitored items

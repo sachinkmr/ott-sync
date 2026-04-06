@@ -38,6 +38,17 @@
     "broadcast_address": ""
   },
   
+  "_comment_rating_gate": "When auto_download=true AND rating_gate.enabled=true, items NOT on OTT are subject to threshold-based gating: high-rated items auto-download, mid-range items trigger a Telegram approval prompt, low-rated items are skipped, and items with no rating are deferred for weekly re-evaluation. Disabled by default.",
+  "rating_gate": {
+    "enabled": false,
+    "auto_download_threshold_pct": 80,
+    "approval_threshold_pct": 70,
+    "min_vote_count": 50,
+    "trending_window": "week",
+    "defer_days_on_no_rating": 7,
+    "max_defer_attempts": 0
+  },
+
   "_comment_omdb": "Optional OMDb API key for IMDb ratings in Telegram notifications. Get a free key (1,000 req/day) at https://www.omdbapi.com/apikey.aspx. Leave api_key empty to disable.",
   "omdb": {
     "api_key": "",

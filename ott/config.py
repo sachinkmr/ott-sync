@@ -157,6 +157,18 @@ class Config:
         # Auto download mode (True = automatic, False = manual approval required)
         self.auto_download: bool = config_dict.get("auto_download", False)
 
+        # Rating gate: when auto_download=true AND rating_gate.enabled=true,
+        # items NOT on OTT are subject to threshold-based gating instead of
+        # downloading unconditionally. See Plan.md §7.1 for the decision matrix.
+        rg_cfg = config_dict.get("rating_gate", {}) or {}
+        self.rating_gate_enabled: bool = rg_cfg.get("enabled", False)
+        self.rating_gate_auto_download_pct: int = rg_cfg.get("auto_download_threshold_pct", 80)
+        self.rating_gate_approval_pct: int = rg_cfg.get("approval_threshold_pct", 70)
+        self.rating_gate_min_vote_count: int = rg_cfg.get("min_vote_count", 50)
+        self.rating_gate_trending_window: str = rg_cfg.get("trending_window", "week")
+        self.rating_gate_defer_days: int = rg_cfg.get("defer_days_on_no_rating", 7)
+        self.rating_gate_max_defer_attempts: int = rg_cfg.get("max_defer_attempts", 0)
+
         # Optional OMDb API key for IMDb ratings (free tier: 1,000 req/day).
         # When set, _fetch_ratings will include IMDb scores in Telegram captions.
         omdb_cfg = config_dict.get("omdb", {}) or {}
