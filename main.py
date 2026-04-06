@@ -416,7 +416,8 @@ def main():
     register_telegram_routes(
         lambda: _managers['radarr'],
         lambda: _managers['sonarr'],
-        lambda: _managers['telegram']
+        lambda: _managers['telegram'],
+        webhook_secret=config.telegram_webhook_secret,
     )
     register_health_routes(
         lambda: _managers['radarr'],

@@ -1,8 +1,9 @@
 """Telegram callback endpoint for override approvals"""
 
+import hmac
 import logging
 from typing import Callable
-from fastapi import Request
+from fastapi import Request, HTTPException
 
 from .app import app
 from .models import parse_callback_action
@@ -10,30 +11,53 @@ from ..constants import COMMAND_MOVIES_SEARCH, COMMAND_SERIES_SEARCH
 
 logger = logging.getLogger("ott-hooks")
 
+# Header name that Telegram sends the secret_token in. Set the same
+# value when calling setWebhook with the secret_token parameter.
+_TG_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
-def register_telegram_routes(get_radarr_mgr: Callable, get_sonarr_mgr: Callable, get_telegram: Callable):
+
+def register_telegram_routes(
+    get_radarr_mgr: Callable,
+    get_sonarr_mgr: Callable,
+    get_telegram: Callable,
+    webhook_secret: str = "",
+):
     """Register Telegram callback endpoint
-    
+
     Args:
         get_radarr_mgr: Callable that returns current RadarrManager instance
         get_sonarr_mgr: Callable that returns current SonarrManager instance
         get_telegram: Callable that returns current TelegramNotifier instance
+        webhook_secret: If non-empty, every incoming request must carry a
+            matching X-Telegram-Bot-Api-Secret-Token header. Requests
+            without it (or with a wrong value) get a 403.
     """
-    
+
     @app.post("/telegram/callback")
     async def telegram_callback(request: Request):
         """Handle Telegram bot callback (override button clicks and anime confirmations)
-        
+
         Callback data formats:
         - "override:movie:123" or "override:series:456" - OTT override
+        - "approve:movie:123" or "approve:series:456" - Manual approval
         - "anime:confirm:123" - Confirm series is anime
         - "anime:reject:123" - Reject series as anime
         """
+        # ── Verify secret token (§2.4) ──
+        if webhook_secret:
+            header_value = request.headers.get(_TG_SECRET_HEADER, "")
+            if not hmac.compare_digest(header_value, webhook_secret):
+                logger.warning(
+                    f"[TG] Rejected callback: invalid or missing "
+                    f"{_TG_SECRET_HEADER} header"
+                )
+                raise HTTPException(status_code=403, detail="Invalid secret token")
+
         payload = await request.json()
         cb = payload.get("callback_query", {})
         callback_data = cb.get("data", "")
         user = cb.get("from", {}).get("first_name", "User")
-        
+
         # Get current telegram instance (supports hot reload)
         telegram = get_telegram()
 

@@ -182,13 +182,23 @@ Add event and the cron sweep.
    ```
 4. **Register webhook** (Required for callbacks to work):
    ```bash
+   # Generate a random secret (1-256 alphanumeric characters):
+   SECRET=$(openssl rand -hex 32)
+   echo "Your webhook secret: $SECRET"
+   
    curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook" \
      -H "Content-Type: application/json" \
      -d '{
        "url": "https://your-domain.com:9123/telegram/callback",
-       "allowed_updates": ["callback_query"]
+       "allowed_updates": ["callback_query"],
+       "secret_token": "'"$SECRET"'"
      }'
    ```
+   **Important**: Copy the same secret into `telegram.webhook_secret_token` in
+   your `config.json`. When set, ott-sync verifies every incoming request
+   carries the matching `X-Telegram-Bot-Api-Secret-Token` header and rejects
+   forgeries with 403.
+   
    **Note**: Your server must be publicly accessible via HTTPS for callbacks to work.
 
 5. Add credentials to `config.json`

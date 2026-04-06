@@ -10,13 +10,14 @@
   "_comment_ott_providers": "List of OTT providers to check (case-sensitive, must match JustWatch provider names)",
   "ott_providers": ["Netflix", "Prime Video", "Disney Plus Hotstar"],
   
-  "_comment_telegram": "Telegram bot configuration for notifications and interactive buttons. chat_id receives all normal alerts; admin_chat_id (optional) receives anime-maybe confirmation prompts only - leave empty to route them to chat_id instead.",
+  "_comment_telegram": "Telegram bot configuration for notifications and interactive buttons. chat_id receives all normal alerts; admin_chat_id (optional) receives anime-maybe confirmation prompts only - leave empty to route them to chat_id instead. webhook_secret_token: set the SAME value here AND in your setWebhook call (secret_token param). When non-empty, /telegram/callback rejects requests without a matching X-Telegram-Bot-Api-Secret-Token header.",
   "telegram": {
     "enabled": true,
     "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
     "chat_id": "YOUR_TELEGRAM_CHAT_ID_HERE",
     "admin_chat_id": "",
-    "region": "India"
+    "region": "India",
+    "webhook_secret_token": ""
   },
   
   "_comment_region": "JustWatch region code (IN, US, GB, etc.) - must match your location",

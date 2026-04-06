@@ -102,6 +102,10 @@ class Config:
         # Telegram configuration (dict-form, consumed by TelegramNotifier)
         self.telegram: dict[str, Any] = config_dict.get("telegram", {})
         self.telegram_admin_chat_id: Optional[str] = self.telegram.get("admin_chat_id")
+        # Telegram webhook secret token — set the same value in your setWebhook
+        # call and here. When non-empty, /telegram/callback rejects requests
+        # that don't carry the matching X-Telegram-Bot-Api-Secret-Token header.
+        self.telegram_webhook_secret: str = self.telegram.get("webhook_secret_token", "")
 
         # Region
         self.region: str = config_dict.get("region", "IN")
