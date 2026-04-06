@@ -1355,8 +1355,8 @@ class OTTBaseManager(ABC):
 
     # -------------------- Cron --------------------
     def cron_cleanup(self) -> ProcessingMetrics:
-        """Scheduled cleanup - check all monitored items
-        
+        """Scheduled cleanup - check all monitored items + sweep deferred evaluations.
+
         Returns:
             Processing metrics
         """
@@ -1366,13 +1366,170 @@ class OTTBaseManager(ABC):
 
         for item in items:
             item_id = item.get("id")
-            
+
             # 🔐 Acquire item-level lock to prevent race with webhooks
             with self._get_item_lock(item_id):
                 self._process_cron_item_locked(item, metrics)
-        
+
+        # Sweep deferred rating-gate evaluations
+        self._sweep_pending_evaluations()
+
         logger.info(f"[CRON] Completed → {metrics}")
         return metrics
+
+    def _sweep_pending_evaluations(self) -> None:
+        """Re-evaluate deferred items whose next_check_at has arrived.
+
+        For each due row in pending_evaluation:
+        1. Re-fetch the TMDB rating (may have accumulated votes since deferral).
+        2. Re-run the decide() function.
+        3. Apply the resulting action:
+           - AUTO_DOWNLOAD → re-monitor, tag ott-processed, delete row.
+           - REQUEST_APPROVAL → send Telegram prompt, delete row.
+           - SKIP_LOW_RATING → tag ott-low-rating + ott-processed, delete row.
+           - DEFER_NO_RATING (still) → bump attempts, push next_check_at.
+             If max_defer_attempts > 0 and exceeded, promote to REQUEST_APPROVAL.
+        """
+        from .decision import Decision, RatingResult, decide
+        from ..db.repositories.rating_gate import (
+            PendingApprovalRepository,
+            PendingEvaluationRepository,
+        )
+
+        arr_type = "radarr" if self.item_type() == "movie" else "sonarr"
+        due_rows = PendingEvaluationRepository.get_due(limit=200)
+        # Filter to rows matching this manager's arr_type
+        due_rows = [r for r in due_rows if r["arr_type"] == arr_type]
+
+        if not due_rows:
+            return
+
+        logger.info(
+            f"[CRON-SWEEP] {len(due_rows)} deferred evaluation(s) due for "
+            f"{self.item_type()}"
+        )
+
+        for row in due_rows:
+            item_id = row["arr_item_id"]
+            tmdb_id = row["tmdb_id"]
+            title = row["title"]
+            tmdb_media = row["media_type"]  # "movie" or "tv"
+
+            # Check if item now has ott-override (user may have overridden manually)
+            res = self.client.get(f"{self.item_type()}/{item_id}")
+            if not res:
+                logger.warning(
+                    f"[CRON-SWEEP] Item {item_id} no longer exists, removing row"
+                )
+                PendingEvaluationRepository.delete(row["id"])
+                continue
+
+            item_data = res.json()
+            item_tags = set(item_data.get("tags", []))
+            if self.override_tag in item_tags:
+                logger.info(
+                    f"[CRON-SWEEP] {title} id={item_id} now has ott-override, "
+                    f"removing from deferred queue"
+                )
+                PendingEvaluationRepository.delete(row["id"])
+                continue
+
+            # Re-fetch rating
+            rating_result = None
+            trending = False
+            if self.tmdb_client and tmdb_id:
+                raw = self.tmdb_client.get_rating(
+                    tmdb_id, tmdb_media,
+                    min_vote_count=self.rating_gate_min_vote_count,
+                )
+                if raw:
+                    rating_result = RatingResult(
+                        score_pct=raw["score_pct"],
+                        source=raw["source"],
+                        vote_count=raw["vote_count"],
+                    )
+                trending = self.tmdb_client.is_trending(
+                    tmdb_id, tmdb_media, self.rating_gate_trending_window,
+                )
+
+            result = decide(
+                auto_download=self.auto_download,
+                rating_gate_enabled=self.rating_gate_enabled,
+                rating=rating_result,
+                trending=trending,
+                auto_download_threshold_pct=self.rating_gate_auto_download_pct,
+                approval_threshold_pct=self.rating_gate_approval_pct,
+            )
+
+            logger.info(
+                f"[CRON-SWEEP] {title}: {result.decision.value} "
+                f"(attempt {row['attempts'] + 1}, reason: {result.reason})"
+            )
+
+            if result.decision == Decision.AUTO_DOWNLOAD:
+                # Re-monitor and mark processed
+                item_data["monitored"] = True
+                item_data["tags"] = list(item_tags | {self.processed_tag})
+                self.client.put(f"{self.item_type()}/{item_id}", json=item_data)
+                PendingEvaluationRepository.delete(row["id"])
+                logger.info(f"[CRON-SWEEP] {title} → auto-download, re-monitored")
+
+            elif result.decision == Decision.REQUEST_APPROVAL:
+                self._add_tag_to_item(item_id, "ott-pending-approval")
+                PendingApprovalRepository.create(
+                    media_type=tmdb_media, tmdb_id=tmdb_id,
+                    arr_type=arr_type, arr_item_id=item_id,
+                    title=title, reason=result.reason,
+                    rating_score_pct=result.rating.score_pct if result.rating else None,
+                    trending=result.trending,
+                )
+                ratings = self._fetch_ratings(item_data)
+                tags = set(item_data.get("tags", []))
+                self._send_approval_notification(
+                    item=item_data, item_id=item_id, title=title,
+                    year=item_data.get("year"), ratings=ratings,
+                    tags=tags, reason=result.reason,
+                )
+                PendingEvaluationRepository.delete(row["id"])
+                logger.info(f"[CRON-SWEEP] {title} → approval requested")
+
+            elif result.decision == Decision.SKIP_LOW_RATING:
+                self._add_tag_to_item(item_id, "ott-low-rating")
+                self._add_tag_to_item(item_id, "ott-processed")
+                PendingEvaluationRepository.delete(row["id"])
+                logger.info(f"[CRON-SWEEP] {title} → skipped (low rating)")
+
+            elif result.decision == Decision.DEFER_NO_RATING:
+                # Still no rating - bump or promote
+                max_attempts = self.rating_gate_max_defer_attempts
+                if max_attempts > 0 and row["attempts"] + 1 >= max_attempts:
+                    # Max attempts reached → promote to approval
+                    logger.info(
+                        f"[CRON-SWEEP] {title} → max defer attempts "
+                        f"({max_attempts}) reached, promoting to approval"
+                    )
+                    self._add_tag_to_item(item_id, "ott-pending-approval")
+                    PendingApprovalRepository.create(
+                        media_type=tmdb_media, tmdb_id=tmdb_id,
+                        arr_type=arr_type, arr_item_id=item_id,
+                        title=title, reason=f"deferred {max_attempts}x, still no rating",
+                    )
+                    ratings = self._fetch_ratings(item_data)
+                    tags = set(item_data.get("tags", []))
+                    self._send_approval_notification(
+                        item=item_data, item_id=item_id, title=title,
+                        year=item_data.get("year"), ratings=ratings,
+                        tags=tags, reason=f"deferred {max_attempts}x, still no rating",
+                    )
+                    PendingEvaluationRepository.delete(row["id"])
+                else:
+                    PendingEvaluationRepository.bump(
+                        row["id"], defer_days=self.rating_gate_defer_days,
+                    )
+                    logger.info(
+                        f"[CRON-SWEEP] {title} → still no rating, "
+                        f"re-check in {self.rating_gate_defer_days} days"
+                    )
     
     def _process_cron_item_locked(self, item: dict, metrics: ProcessingMetrics) -> None:
         """Process single item in cron with lock held
