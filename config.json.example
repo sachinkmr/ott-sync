@@ -38,6 +38,14 @@
     "broadcast_address": ""
   },
   
+  "_comment_manual_add_detection": "Auto-exempt manually added items from OTT/rating logic. Works by inverse-tag matching: if an item carries NONE of the listed import-list tags, it's treated as user-added and ott-override is applied. Requires each import list in Radarr/Sonarr to apply an identifying tag.",
+  "manual_add_detection": {
+    "enabled": false,
+    "import_list_tags": ["list-trakt", "list-imdb", "list-plex-watchlist"],
+    "auto_apply_override_tag": true,
+    "tag_recheck_delay_ms": 1500
+  },
+
   "_comment_webhook_events": "Webhook events to process (MovieAdded, SeriesAdded, Grab, etc.)",
   "webhook_events": [
     "MovieAdded",

@@ -123,6 +123,12 @@ def reload_configuration():
         # keep using the old instances; subsequent lookups see the new set.
         # The assignment `_managers = new_managers` is a single bytecode op,
         # so there is no observable half-swapped state.
+        manual_add_kwargs = dict(
+            manual_add_detection_enabled=config.manual_add_detection_enabled,
+            import_list_tags=config.import_list_tags,
+            manual_add_auto_apply_override=config.manual_add_auto_apply_override,
+            manual_add_tag_recheck_delay_ms=config.manual_add_tag_recheck_delay_ms,
+        )
         new_managers = {
             'telegram': telegram,
             'radarr': RadarrManager(
@@ -134,6 +140,7 @@ def reload_configuration():
                 auto_download=config.auto_download,
                 tmdb_client=tmdb_client,
                 anilist_client=anilist_client,
+                **manual_add_kwargs,
             ),
             'sonarr': SonarrManager(
                 arr_client=sonarr_client,
@@ -146,6 +153,7 @@ def reload_configuration():
                 anilist_client=anilist_client,
                 anime_detector=anime_detector,
                 anime_config=anime_config_dict,
+                **manual_add_kwargs,
             ),
         }
         _managers = new_managers
@@ -310,22 +318,36 @@ def main():
     # Store telegram in _managers for hot reload access
     _managers['telegram'] = telegram
     
+    manual_add_kwargs = dict(
+        manual_add_detection_enabled=config.manual_add_detection_enabled,
+        import_list_tags=config.import_list_tags,
+        manual_add_auto_apply_override=config.manual_add_auto_apply_override,
+        manual_add_tag_recheck_delay_ms=config.manual_add_tag_recheck_delay_ms,
+    )
     _managers['radarr'] = RadarrManager(
         arr_client=radarr_client,
         justwatch_client=justwatch,
         telegram=telegram,
         ott_providers=set(config.ott_providers),
-        verification_delay_seconds=config.verification_delay_seconds
+        verification_delay_seconds=config.verification_delay_seconds,
+        auto_download=config.auto_download,
+        tmdb_client=tmdb_client,
+        anilist_client=anilist_client,
+        **manual_add_kwargs,
     )
-    
+
     _managers['sonarr'] = SonarrManager(
         arr_client=sonarr_client,
         justwatch_client=justwatch,
         telegram=telegram,
         ott_providers=set(config.ott_providers),
         verification_delay_seconds=config.verification_delay_seconds,
+        auto_download=config.auto_download,
+        tmdb_client=tmdb_client,
+        anilist_client=anilist_client,
         anime_detector=anime_detector,
-        anime_config=anime_config_dict
+        anime_config=anime_config_dict,
+        **manual_add_kwargs,
     )
     
     # Run anime migration if enabled

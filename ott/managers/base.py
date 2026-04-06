@@ -36,9 +36,13 @@ class OTTBaseManager(ABC):
         auto_download: bool = False,
         tmdb_client = None,
         anilist_client = None,
+        manual_add_detection_enabled: bool = False,
+        import_list_tags: list[str] | None = None,
+        manual_add_auto_apply_override: bool = True,
+        manual_add_tag_recheck_delay_ms: int = 1500,
     ):
         """Initialize OTT manager
-        
+
         Args:
             arr_client: HTTP client for Radarr/Sonarr API
             justwatch_client: Client for OTT provider lookup
@@ -49,6 +53,17 @@ class OTTBaseManager(ABC):
             auto_download: If False, require manual approval for all items (default: False)
             tmdb_client: Optional TMDBClient for fetching ratings
             anilist_client: Optional AniListClient for fetching anime ratings
+            manual_add_detection_enabled: Treat items carrying none of the
+                import_list_tags as user-added and auto-apply ott-override.
+            import_list_tags: Labels of tags applied by *arr import lists.
+                Only meaningful when manual_add_detection_enabled=True.
+            manual_add_auto_apply_override: When a manual add is detected,
+                actually add the ott-override tag (True) or just skip the
+                pipeline without tagging (False, dry-run / audit mode).
+            manual_add_tag_recheck_delay_ms: Re-fetch the item's tags after
+                this delay if none of the list tags matched on first read,
+                to handle the race where *arr applies the list tag just
+                after emitting the webhook. 0 disables the recheck.
         """
         self.client = arr_client
         self.justwatch = justwatch_client
@@ -59,6 +74,11 @@ class OTTBaseManager(ABC):
         self.auto_download = auto_download
         self.tmdb_client = tmdb_client
         self.anilist_client = anilist_client
+        self.manual_add_detection_enabled = manual_add_detection_enabled
+        self.import_list_tags = import_list_tags or []
+        self.manual_add_auto_apply_override = manual_add_auto_apply_override
+        self.manual_add_tag_recheck_delay_ms = manual_add_tag_recheck_delay_ms
+        self._import_list_tag_ids_cache: set[int] | None = None
         self.pool = ThreadPoolExecutor(max_workers=DEFAULT_THREAD_POOL_SIZE)
         self._metrics_lock = threading.Lock()
         self._tag_cache: dict[int, str] = {}  # Cache tag ID -> label mapping
@@ -398,10 +418,10 @@ class OTTBaseManager(ABC):
     
     def _get_or_create_tag(self, label: str) -> int:
         """Get existing tag ID or create new tag
-        
+
         Args:
             label: Tag label
-            
+
         Returns:
             Tag ID
         """
@@ -418,8 +438,129 @@ class OTTBaseManager(ABC):
         res = self.client.post("tag", json={"label": label})
         if not res:
             raise ArrAPIError(f"Failed to create tag '{label}'")
-        
+
         return res.json()["id"]
+
+    def _resolve_import_list_tag_ids(self) -> set[int]:
+        """Map configured import_list_tags labels to *arr tag IDs.
+
+        Lookup-only: does NOT create missing tags. An import-list tag that
+        doesn't exist in *arr yet just means no items have been imported
+        from that list, which is fine - no item can carry it.
+
+        Result is cached on the manager instance; call .reset_import_list_cache()
+        to refresh after a config reload.
+        """
+        if self._import_list_tag_ids_cache is not None:
+            return self._import_list_tag_ids_cache
+
+        res = self.client.get("tag")
+        if not res:
+            logger.warning("[MANUAL-ADD] Failed to fetch tags - disabling detection")
+            self._import_list_tag_ids_cache = set()
+            return self._import_list_tag_ids_cache
+
+        label_to_id = {t["label"]: t["id"] for t in res.json()}
+        resolved = {
+            label_to_id[label] for label in self.import_list_tags
+            if label in label_to_id
+        }
+        if len(resolved) < len(self.import_list_tags):
+            missing = [l for l in self.import_list_tags if l not in label_to_id]
+            logger.info(f"[MANUAL-ADD] Import-list tags not yet in *arr: {missing}")
+        self._import_list_tag_ids_cache = resolved
+        return resolved
+
+    def reset_import_list_cache(self) -> None:
+        """Force _resolve_import_list_tag_ids() to re-query *arr on next call."""
+        self._import_list_tag_ids_cache = None
+
+    def _is_manual_add(self, item_tags: set[int]) -> bool:
+        """Return True when the item carries none of the import_list_tags.
+
+        Returns False (i.e. 'treat as list-sourced') if detection is
+        disabled, if no import list tags are configured, or if none of
+        the configured tag labels resolve to an *arr tag id yet.
+        """
+        if not self.manual_add_detection_enabled or not self.import_list_tags:
+            return False
+        list_tag_ids = self._resolve_import_list_tag_ids()
+        if not list_tag_ids:
+            return False
+        return not (item_tags & list_tag_ids)
+
+    def _handle_manual_add(self, item_id: int, tags: set[int]) -> bool:
+        """Detect and handle manually-added items.
+
+        If manual_add_detection is enabled and the item carries none of the
+        configured import_list_tags, treat it as user-added:
+          - if auto_apply_override_tag: apply the ott-override tag,
+          - log a [MANUAL-ADD] line,
+          - return True so the caller skips the OTT pipeline.
+
+        Includes a retry-after-delay to handle the webhook race where *arr
+        fires before applying the import-list tag.
+
+        Args:
+            item_id: The *arr item id.
+            tags: The tag IDs the webhook payload carried.
+
+        Returns:
+            True if the item was treated as manual (caller should return).
+            False if detection is off or the item is list-sourced.
+        """
+        if not self.manual_add_detection_enabled or not self.import_list_tags:
+            return False
+
+        if not self._is_manual_add(tags):
+            return False
+
+        # Race mitigation: the webhook may have fired before *arr applied the
+        # import-list tag. Re-fetch the item's tags after a short delay.
+        if self.manual_add_tag_recheck_delay_ms > 0:
+            import time as _time
+            _time.sleep(self.manual_add_tag_recheck_delay_ms / 1000.0)
+            res = self.client.get(f"{self.item_type()}/{item_id}")
+            if res:
+                refreshed_tags = set(res.json().get("tags", []))
+                if not self._is_manual_add(refreshed_tags):
+                    logger.debug(
+                        f"[MANUAL-ADD] id={item_id} picked up a list tag on "
+                        f"recheck, treating as list-sourced"
+                    )
+                    return False
+
+        logger.info(
+            f"[MANUAL-ADD] id={item_id} carries no import-list tag, "
+            f"treating as manual add"
+        )
+        if self.manual_add_auto_apply_override:
+            self._apply_override_tag(item_id)
+        return True
+
+    def _apply_override_tag(self, item_id: int) -> bool:
+        """Add the ott-override tag to an item via PUT.
+
+        Returns True on success, False otherwise. Refetches the item first
+        so the PUT body reflects the latest state (avoids clobbering
+        concurrent mutations).
+        """
+        res = self.client.get(f"{self.item_type()}/{item_id}")
+        if not res:
+            logger.error(f"[MANUAL-ADD] Failed to fetch item id={item_id} for override apply")
+            return False
+        data = res.json()
+        current_tags = set(data.get("tags", []))
+        if self.override_tag in current_tags:
+            return True  # already there
+        current_tags.add(self.override_tag)
+        data["tags"] = list(current_tags)
+        update_res = self.client.put(f"{self.item_type()}/{item_id}", json=data)
+        if not update_res:
+            logger.error(f"[MANUAL-ADD] Failed to apply ott-override to id={item_id}")
+            return False
+        logger.info(f"[MANUAL-ADD] Applied ott-override to id={item_id}")
+        return True
     
     def _get_tag_labels(self, tag_ids: list[int]) -> dict[int, str]:
         """Get tag labels for given tag IDs with caching
@@ -679,7 +820,11 @@ class OTTBaseManager(ABC):
                 f"for {self.item_type()} id={item_id}"
             )
             return
-        
+
+        # 🏷️ Manual-add detection (inverse tag match)
+        if self._handle_manual_add(item_id, tags):
+            return
+
         # 🔐 Acquire item-level lock to prevent race conditions
         with self._get_item_lock(item_id):
             logger.debug(f"[LOCK] Acquired lock for {self.item_type()} id={item_id}")

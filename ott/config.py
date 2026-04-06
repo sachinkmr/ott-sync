@@ -163,6 +163,21 @@ class Config:
         self.wakeup_mac_address: str = wakeup_cfg.get("mac_address", "")
         self.wakeup_broadcast_address: str = wakeup_cfg.get("broadcast_address", "")
 
+        # Optional inverse-tag detection for manually-added items.
+        # If an incoming item carries NONE of import_list_tags, treat it as a
+        # manual add and apply ott-override automatically to skip OTT logic.
+        # Disabled by default - users must opt in by listing their import
+        # list's tag labels.
+        mad_cfg = config_dict.get("manual_add_detection", {}) or {}
+        self.manual_add_detection_enabled: bool = mad_cfg.get("enabled", False)
+        self.import_list_tags: list[str] = mad_cfg.get("import_list_tags", []) or []
+        self.manual_add_auto_apply_override: bool = mad_cfg.get(
+            "auto_apply_override_tag", True,
+        )
+        self.manual_add_tag_recheck_delay_ms: int = mad_cfg.get(
+            "tag_recheck_delay_ms", 1500,
+        )
+
         # Store raw config for backward compatibility
         self._raw_config = config_dict
     
