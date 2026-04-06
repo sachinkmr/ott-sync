@@ -38,6 +38,13 @@
     "broadcast_address": ""
   },
   
+  "_comment_omdb": "Optional OMDb API key for IMDb ratings in Telegram notifications. Get a free key (1,000 req/day) at https://www.omdbapi.com/apikey.aspx. Leave api_key empty to disable.",
+  "omdb": {
+    "api_key": "",
+    "rate_limit_calls": 50,
+    "rate_limit_period": 60
+  },
+
   "_comment_manual_add_detection": "Auto-exempt manually added items from OTT/rating logic. Works by inverse-tag matching: if an item carries NONE of the listed import-list tags, it's treated as user-added and ott-override is applied. Requires each import list in Radarr/Sonarr to apply an identifying tag.",
   "manual_add_detection": {
     "enabled": false,

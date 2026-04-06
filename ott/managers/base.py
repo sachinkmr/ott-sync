@@ -36,6 +36,7 @@ class OTTBaseManager(ABC):
         auto_download: bool = False,
         tmdb_client = None,
         anilist_client = None,
+        omdb_client = None,
         manual_add_detection_enabled: bool = False,
         import_list_tags: list[str] | None = None,
         manual_add_auto_apply_override: bool = True,
@@ -53,6 +54,7 @@ class OTTBaseManager(ABC):
             auto_download: If False, require manual approval for all items (default: False)
             tmdb_client: Optional TMDBClient for fetching ratings
             anilist_client: Optional AniListClient for fetching anime ratings
+            omdb_client: Optional OMDbClient for fetching IMDb ratings via OMDb
             manual_add_detection_enabled: Treat items carrying none of the
                 import_list_tags as user-added and auto-apply ott-override.
             import_list_tags: Labels of tags applied by *arr import lists.
@@ -74,6 +76,7 @@ class OTTBaseManager(ABC):
         self.auto_download = auto_download
         self.tmdb_client = tmdb_client
         self.anilist_client = anilist_client
+        self.omdb_client = omdb_client
         self.manual_add_detection_enabled = manual_add_detection_enabled
         self.import_list_tags = import_list_tags or []
         self.manual_add_auto_apply_override = manual_add_auto_apply_override
@@ -609,37 +612,46 @@ class OTTBaseManager(ABC):
         return users
     
     def _fetch_ratings(self, item: dict[str, Any]) -> dict[str, float | None]:
-        """Fetch ratings from available sources (TMDb, AniList).
-
-        IMDb is not supported - TMDb exposes the imdb_id but not the score,
-        which would require a separate OMDb API integration (deferred).
+        """Fetch ratings from available sources (TMDb, IMDb via OMDb, AniList).
 
         Args:
             item: Item data from webhook payload
 
         Returns:
-            Dict of source -> rating (0-10 scale): {"tmdb": 8.5, "anilist": 8.2}.
+            Dict of source -> rating (0-10 scale).
             Keys are always present; values are None when the fetch failed or
-            the source is not applicable.
+            the source is not configured.
         """
-        ratings: dict[str, float | None] = {"tmdb": None, "anilist": None}
+        ratings: dict[str, float | None] = {"tmdb": None, "imdb": None, "anilist": None}
 
         tmdb_id = item.get("tmdbId")
+        imdb_id = item.get("imdbId")
 
-        # Fetch TMDb ratings
+        # Fetch TMDb ratings (also extracts imdb_id for movies if not in payload)
         if self.tmdb_client and tmdb_id:
             try:
                 if self.item_type() == "movie":
                     tmdb_data = self.tmdb_client.get_movie_ratings(tmdb_id)
+                    if tmdb_data:
+                        ratings["tmdb"] = tmdb_data.get("tmdb")
+                        if not imdb_id:
+                            imdb_id = tmdb_data.get("imdb_id")
                 else:  # series
                     tmdb_data = self.tmdb_client.get_series_ratings(tmdb_id)
-                if tmdb_data:
-                    ratings["tmdb"] = tmdb_data.get("tmdb")
+                    if tmdb_data:
+                        ratings["tmdb"] = tmdb_data.get("tmdb")
             except Exception as e:
                 logger.error(f"[RATINGS] TMDb fetch error: {e}")
 
-        # AniList ratings are only available when we know the AniList ID, which
-        # we don't expose from the anime_detector yet. Phase 7.3 will wire this.
+        # Fetch IMDb rating via OMDb (requires omdb_api_key in config)
+        if self.omdb_client and imdb_id:
+            try:
+                ratings["imdb"] = self.omdb_client.get_imdb_rating(imdb_id)
+            except Exception as e:
+                logger.error(f"[RATINGS] OMDb fetch error: {e}")
+
+        # AniList ratings require the AniList ID which we don't yet expose
+        # from the anime_detector. Left as None until that's wired.
         return ratings
     
     def _extract_plex_user(self, item: dict[str, Any]) -> str | None:
@@ -945,6 +957,7 @@ class OTTBaseManager(ABC):
                 item_id=item_id,
                 requested_by=requested_by,
                 tmdb_rating=ratings.get("tmdb"),
+                imdb_rating=ratings.get("imdb"),
                 anilist_rating=ratings.get("anilist"),
                 manual_mode=True,
             )
@@ -1073,6 +1086,7 @@ class OTTBaseManager(ABC):
                 item_id=item_id,
                 requested_by=requested_by,
                 tmdb_rating=ratings.get("tmdb"),
+                imdb_rating=ratings.get("imdb"),
                 anilist_rating=ratings.get("anilist"),
                 manual_mode=False,
             )
@@ -1096,6 +1110,8 @@ class OTTBaseManager(ABC):
                 ratings_parts = []
                 if ratings.get("tmdb"):
                     ratings_parts.append(f"⭐ TMDb: {ratings['tmdb']:.1f}/10")
+                if ratings.get("imdb"):
+                    ratings_parts.append(f"⭐ IMDb: {ratings['imdb']:.1f}/10")
                 if ratings.get("anilist"):
                     ratings_parts.append(f"⭐ AniList: {ratings['anilist']:.1f}/10")
                 

@@ -24,6 +24,7 @@ def build_telegram_caption(
     item_id: int,
     requested_by: str | None = None,
     tmdb_rating: float | None = None,
+    imdb_rating: float | None = None,
     anilist_rating: float | None = None,
     manual_mode: bool = False,
 ) -> str:
@@ -38,6 +39,7 @@ def build_telegram_caption(
         item_id: Radarr/Sonarr item ID
         requested_by: Name of user who requested the item (optional)
         tmdb_rating: TMDb rating (0-10 scale, optional)
+        imdb_rating: IMDb rating (0-10 scale, optional, via OMDb)
         anilist_rating: AniList rating (0-10 scale, optional)
         manual_mode: If True, shows manual approval message instead of OTT block message
 
@@ -50,6 +52,8 @@ def build_telegram_caption(
     ratings_parts = []
     if tmdb_rating:
         ratings_parts.append(f"⭐ TMDb: {tmdb_rating:.1f}/10")
+    if imdb_rating:
+        ratings_parts.append(f"⭐ IMDb: {imdb_rating:.1f}/10")
     if anilist_rating:
         ratings_parts.append(f"⭐ AniList: {anilist_rating:.1f}/10")
     

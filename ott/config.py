@@ -157,6 +157,13 @@ class Config:
         # Auto download mode (True = automatic, False = manual approval required)
         self.auto_download: bool = config_dict.get("auto_download", False)
 
+        # Optional OMDb API key for IMDb ratings (free tier: 1,000 req/day).
+        # When set, _fetch_ratings will include IMDb scores in Telegram captions.
+        omdb_cfg = config_dict.get("omdb", {}) or {}
+        self.omdb_api_key: str = omdb_cfg.get("api_key", "")
+        self.omdb_rate_limit_calls: int = omdb_cfg.get("rate_limit_calls", 50)
+        self.omdb_rate_limit_period: int = omdb_cfg.get("rate_limit_period", 60)
+
         # Optional Wake-on-LAN target for the /wakeup utility endpoint.
         # Both fields empty disables the endpoint (returns 400).
         wakeup_cfg = config_dict.get("wakeup", {}) or {}

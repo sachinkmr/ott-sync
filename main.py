@@ -117,7 +117,18 @@ def reload_configuration():
             }
             
             logger.info("  ✓ Anime detection initialized")
-        
+
+        # Optional OMDb client for IMDb ratings
+        omdb_client = None
+        if config.omdb_api_key:
+            from ott.clients.omdb import OMDbClient
+            omdb_client = OMDbClient(
+                api_key=config.omdb_api_key,
+                rate_limit_calls=config.omdb_rate_limit_calls,
+                rate_limit_period=config.omdb_rate_limit_period,
+            )
+            logger.info("  ✓ OMDb client initialized (IMDb ratings enabled)")
+
         # Build the new manager set as a local dict, then swap _managers
         # atomically. In-flight handlers that already dereferenced _managers
         # keep using the old instances; subsequent lookups see the new set.
@@ -140,6 +151,7 @@ def reload_configuration():
                 auto_download=config.auto_download,
                 tmdb_client=tmdb_client,
                 anilist_client=anilist_client,
+                omdb_client=omdb_client,
                 **manual_add_kwargs,
             ),
             'sonarr': SonarrManager(
@@ -151,6 +163,7 @@ def reload_configuration():
                 auto_download=config.auto_download,
                 tmdb_client=tmdb_client,
                 anilist_client=anilist_client,
+                omdb_client=omdb_client,
                 anime_detector=anime_detector,
                 anime_config=anime_config_dict,
                 **manual_add_kwargs,
@@ -161,6 +174,7 @@ def reload_configuration():
         logger.info("✓ Configuration reloaded - new settings active for future requests")
         logger.info(f"  - OTT Providers: {len(config.ott_providers)}")
         logger.info(f"  - Telegram: {'enabled' if telegram.enabled else 'disabled'}")
+        logger.info(f"  - IMDb Ratings: {'enabled (OMDb)' if omdb_client else 'disabled'}")
         logger.info(f"  - Region: {config.region}")
         logger.info(f"  - Auto Download: {'enabled' if config.auto_download else 'disabled (manual mode)'}")
         logger.info(f"  - Anime Detection: {'enabled' if anime_detector else 'disabled'}")
@@ -311,13 +325,24 @@ def main():
         }
         
         logger.info("  ✓ Anime detection initialized")
-    
+
+    # Optional OMDb client for IMDb ratings
+    omdb_client = None
+    if config.omdb_api_key:
+        from ott.clients.omdb import OMDbClient
+        omdb_client = OMDbClient(
+            api_key=config.omdb_api_key,
+            rate_limit_calls=config.omdb_rate_limit_calls,
+            rate_limit_period=config.omdb_rate_limit_period,
+        )
+        logger.info("  ✓ OMDb client initialized (IMDb ratings enabled)")
+
     # Initialize managers with dependency injection
     logger.info("Initializing managers...")
-    
+
     # Store telegram in _managers for hot reload access
     _managers['telegram'] = telegram
-    
+
     manual_add_kwargs = dict(
         manual_add_detection_enabled=config.manual_add_detection_enabled,
         import_list_tags=config.import_list_tags,
@@ -333,6 +358,7 @@ def main():
         auto_download=config.auto_download,
         tmdb_client=tmdb_client,
         anilist_client=anilist_client,
+        omdb_client=omdb_client,
         **manual_add_kwargs,
     )
 
@@ -345,6 +371,7 @@ def main():
         auto_download=config.auto_download,
         tmdb_client=tmdb_client,
         anilist_client=anilist_client,
+        omdb_client=omdb_client,
         anime_detector=anime_detector,
         anime_config=anime_config_dict,
         **manual_add_kwargs,
