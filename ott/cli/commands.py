@@ -114,6 +114,11 @@ def register_commands(get_radarr_mgr: Callable, get_sonarr_mgr: Callable, fastap
             "--keep-override/--clear-override",
             help="Keep ott-override tags (default: keep them)"
         ),
+        remonitor: bool = typer.Option(
+            False,
+            "--remonitor",
+            help="Also re-monitor all unmonitored items (so cron reprocesses them)"
+        ),
     ):
         """Strip all OTT tags from every item for a clean reprocess.
 
@@ -149,20 +154,29 @@ def register_commands(get_radarr_mgr: Callable, get_sonarr_mgr: Callable, fastap
             # Also include anime-detection state tags if they look like ott workflow
             # (but NOT anime-checked/detected/maybe — those are anime-detection state)
 
-            stats = {"total": len(items), "reset": 0, "skipped": 0}
+            stats = {"total": len(items), "reset": 0, "skipped": 0, "remonitored": 0}
             for item in items:
                 item_id = item.get("id")
                 item_tags = set(item.get("tags", []))
                 tags_to_remove = item_tags & ott_tag_ids
-                if not tags_to_remove:
+                needs_remonitor = remonitor and not item.get("monitored", True)
+                if not tags_to_remove and not needs_remonitor:
                     stats["skipped"] += 1
                     continue
                 new_tags = item_tags - tags_to_remove
                 item["tags"] = list(new_tags)
+                if needs_remonitor:
+                    item["monitored"] = True
+                    stats["remonitored"] += 1
                 update_res = mgr.client.put(f"{mgr.item_type()}/{item_id}", json=item)
                 if update_res:
-                    removed = [all_tags[t] for t in tags_to_remove]
-                    logger.info(f"[RESET] {item.get('title')}: removed {removed}")
+                    removed = [all_tags[t] for t in tags_to_remove] if tags_to_remove else []
+                    parts = []
+                    if removed:
+                        parts.append(f"removed {removed}")
+                    if needs_remonitor:
+                        parts.append("re-monitored")
+                    logger.info(f"[RESET] {item.get('title')}: {', '.join(parts)}")
                     stats["reset"] += 1
                 else:
                     logger.error(f"[RESET] Failed to update {item.get('title')}")
