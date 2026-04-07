@@ -104,6 +104,102 @@ def register_commands(get_radarr_mgr: Callable, get_sonarr_mgr: Callable, fastap
         logger.info("=" * 60)
 
     @app.command()
+    def reset_tags(
+        service: str = typer.Argument(
+            ...,
+            help="Service to reset: 'radarr', 'sonarr', or 'all'"
+        ),
+        keep_override: bool = typer.Option(
+            True,
+            "--keep-override/--clear-override",
+            help="Keep ott-override tags (default: keep them)"
+        ),
+    ):
+        """Strip all OTT tags from every item for a clean reprocess.
+
+        Removes: ott-processed, ott-skipped, ott-low-rating, ott-pending-rating,
+        ott-pending-approval, and all ott-<provider> tags. By default keeps
+        ott-override (user's explicit exemptions). Also clears the
+        pending_evaluation and pending_approval DB tables.
+
+        After running this, use 'python main.py cron' to reprocess the library.
+        """
+        logger.info("=" * 60)
+        logger.info("Resetting OTT tags for clean reprocess")
+        if keep_override:
+            logger.info("  Keeping ott-override tags intact")
+        else:
+            logger.info("  ⚠️  Also clearing ott-override tags")
+        logger.info("=" * 60)
+
+        protected = {"ott-override"} if keep_override else set()
+
+        def _reset_service(mgr, svc_name: str) -> dict:
+            items = mgr.fetch_items()
+            # Fetch all tags to resolve ott-* tag IDs
+            res = mgr.client.get("tag")
+            if not res:
+                logger.error(f"[RESET] Failed to fetch tags from {svc_name}")
+                return {"error": "tag fetch failed"}
+            all_tags = {t["id"]: t["label"] for t in res.json()}
+            ott_tag_ids = {
+                tid for tid, label in all_tags.items()
+                if label.startswith("ott-") and label not in protected
+            }
+            # Also include anime-detection state tags if they look like ott workflow
+            # (but NOT anime-checked/detected/maybe — those are anime-detection state)
+
+            stats = {"total": len(items), "reset": 0, "skipped": 0}
+            for item in items:
+                item_id = item.get("id")
+                item_tags = set(item.get("tags", []))
+                tags_to_remove = item_tags & ott_tag_ids
+                if not tags_to_remove:
+                    stats["skipped"] += 1
+                    continue
+                new_tags = item_tags - tags_to_remove
+                item["tags"] = list(new_tags)
+                update_res = mgr.client.put(f"{mgr.item_type()}/{item_id}", json=item)
+                if update_res:
+                    removed = [all_tags[t] for t in tags_to_remove]
+                    logger.info(f"[RESET] {item.get('title')}: removed {removed}")
+                    stats["reset"] += 1
+                else:
+                    logger.error(f"[RESET] Failed to update {item.get('title')}")
+            return stats
+
+        if service.lower() in ["radarr", "all"]:
+            logger.info("\n📽️ Resetting Radarr movies...")
+            radarr_stats = _reset_service(get_radarr_mgr(), "radarr")
+            logger.info(f"✅ Radarr reset: {radarr_stats}")
+
+        if service.lower() in ["sonarr", "all"]:
+            logger.info("\n📺 Resetting Sonarr series...")
+            sonarr_stats = _reset_service(get_sonarr_mgr(), "sonarr")
+            logger.info(f"✅ Sonarr reset: {sonarr_stats}")
+
+        # Clear rating-gate DB tables
+        try:
+            from ott.db.repositories.rating_gate import (
+                PendingEvaluationRepository,
+                PendingApprovalRepository,
+            )
+            from ott.db.client import get_db
+            db = get_db()
+            with db.session() as session:
+                from ott.db.schema import PendingEvaluationModel, PendingApprovalModel
+                eval_count = session.query(PendingEvaluationModel).delete()
+                appr_count = session.query(PendingApprovalModel).delete()
+                session.commit()
+                logger.info(f"✅ Cleared DB: {eval_count} pending evaluations, {appr_count} pending approvals")
+        except Exception as e:
+            logger.warning(f"⚠️ DB cleanup failed (non-fatal): {e}")
+
+        logger.info("\n" + "=" * 60)
+        logger.info("Tag reset complete! Run 'python main.py cron' to reprocess.")
+        logger.info("=" * 60)
+
+    @app.command()
     def server(
         host: str = typer.Option(
             DEFAULT_SERVER_HOST,
