@@ -885,17 +885,12 @@ class OTTBaseManager(ABC):
         # ═══════════════════════════════════════════════════════════════════
         if not self.auto_download:
             logger.info(f"[MANUAL-MODE] Processing item in manual approval mode")
-            
-            # Skip if item is monitored (already approved/downloading)
-            if was_monitored:
-                logger.info(f"[MANUAL-MODE] Item is monitored (approved), skipping")
-                return
-            
-            # Skip if already has override tag (approved but not yet monitored)
+
+            # Skip if already has override tag (user explicitly approved)
             if self.override_tag in current_tags:
                 logger.info(f"[MANUAL-MODE] Item has override tag (approved), skipping")
                 return
-            
+
             # For Grab events on already-notified items: cancel queue without
             # re-notifying. Grab-before-Add ordering (rare but possible when
             # webhooks race) falls through to the full flow below - it will
