@@ -96,16 +96,18 @@ class OTTProviderClient:
         # ── Primary: TMDB Watch Providers (by tmdb_id) ──
         if tmdb_id and self.tmdb_api_key:
             result = self._tmdb_lookup(tmdb_id, tmdb_type, allowed_providers, title)
-            if result is not None:
-                return result
-            # result is None means TMDB lookup failed → fall through to JW
+            if result is None:
+                pass  # API failure → fall through to JW
+            elif result:
+                return result  # Found on allowed providers → done
+            # result == [] means TMDB says "not on allowed providers". Its data
+            # can be incomplete for some regions, so also check JustWatch as a
+            # second opinion before declaring "not found".
 
-        # ── Fallback: JustWatch title search ──
+        # ── Fallback / second opinion: JustWatch title search ──
         if self.justwatch:
-            logger.info(
-                f"[OTT] Falling back to JustWatch for '{title}' "
-                f"({'no tmdb_id' if not tmdb_id else 'TMDB failed'})"
-            )
+            reason = "no tmdb_id" if not tmdb_id else "TMDB empty/failed"
+            logger.info(f"[OTT] Checking JustWatch for '{title}' ({reason})")
             return self.justwatch.get_providers(
                 title, year, allowed_providers,
                 tmdb_id=tmdb_id, imdb_id=imdb_id,
