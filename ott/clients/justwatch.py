@@ -134,8 +134,11 @@ class JustWatchClient:
                 logger.error(f"[JustWatch] Search failed: {e}")
                 return None
         
-        # Execute with rate limiting
-        result = self.rate_limiter.execute(_search, timeout=30.0)
+        # Execute with rate limiting. Timeout must be generous enough for bulk
+        # cron runs (~240 items at 60 calls/60s = ~4 min queue depth). A short
+        # timeout causes every item past the first burst to fail with "rate
+        # limit timeout" and get deferred instead of processed.
+        result = self.rate_limiter.execute(_search, timeout=300.0)
         
         if result is None:
             logger.error("[JustWatch] Rate limit timeout or execution failed")
