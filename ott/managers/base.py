@@ -931,7 +931,8 @@ class OTTBaseManager(ABC):
                 year, 
                 self.ott_providers,
                 tmdb_id=tmdb_id,
-                imdb_id=imdb_id
+                imdb_id=imdb_id,
+                media_type=self.item_type(),
             )
             
             provider_name = providers[0] if providers else None
@@ -1044,7 +1045,8 @@ class OTTBaseManager(ABC):
                 year, 
                 self.ott_providers,
                 tmdb_id=tmdb_id,
-                imdb_id=imdb_id
+                imdb_id=imdb_id,
+                media_type=self.item_type(),
             )
     
             # 🌐 Infra failure → fail open, retry later
@@ -1569,11 +1571,12 @@ class OTTBaseManager(ABC):
         imdb_id = item.get("imdbId")
         
         providers = self.justwatch.get_providers(
-            item.get("title"), 
+            item.get("title"),
             item.get("year"),
             self.ott_providers,
             tmdb_id=tmdb_id,
-            imdb_id=imdb_id
+            imdb_id=imdb_id,
+            media_type=self.item_type(),
         )
         
         if providers is None:
@@ -1677,7 +1680,8 @@ class OTTBaseManager(ABC):
                     year,
                     self.ott_providers,
                     tmdb_id=tmdb_id,
-                    imdb_id=imdb_id
+                    imdb_id=imdb_id,
+                    media_type=self.item_type(),
                 )
                 
                 # Skip if lookup failed

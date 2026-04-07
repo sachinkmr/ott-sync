@@ -25,6 +25,7 @@ from ott.config import Config
 # Import clients
 from ott.clients.telegram import TelegramNotifier
 from ott.clients.justwatch import JustWatchClient
+from ott.clients.ott_providers import OTTProviderClient
 from ott.clients.arr_client import ArrClient
 
 # Import managers
@@ -60,12 +61,21 @@ def reload_configuration():
         
         # Reinitialize clients
         telegram = TelegramNotifier(config.telegram)
-        justwatch = JustWatchClient(
+        jw_fallback = JustWatchClient(
             region=config.region,
             rate_limit_calls=config.justwatch_rate_limit_calls,
-            rate_limit_period=config.justwatch_rate_limit_period
+            rate_limit_period=config.justwatch_rate_limit_period,
         )
-        
+        # TMDB API key for watch-providers: reuse anime detection key if available
+        tmdb_key = ""
+        if config.anime_detection and config.anime_detection.tmdb_api_key:
+            tmdb_key = config.anime_detection.tmdb_api_key
+        justwatch = OTTProviderClient(
+            tmdb_api_key=tmdb_key,
+            region=config.region,
+            justwatch_client=jw_fallback,
+        )
+
         radarr_client = ArrClient(config.radarr_url, config.radarr_api_key)
         sonarr_client = ArrClient(config.sonarr_url, config.sonarr_api_key)
         
@@ -283,12 +293,20 @@ def main():
     # Initialize clients
     logger.info("Initializing clients...")
     telegram = TelegramNotifier(config.telegram)
-    justwatch = JustWatchClient(
+    jw_fallback = JustWatchClient(
         region=config.region,
         rate_limit_calls=config.justwatch_rate_limit_calls,
-        rate_limit_period=config.justwatch_rate_limit_period
+        rate_limit_period=config.justwatch_rate_limit_period,
     )
-    
+    tmdb_key = ""
+    if config.anime_detection and config.anime_detection.tmdb_api_key:
+        tmdb_key = config.anime_detection.tmdb_api_key
+    justwatch = OTTProviderClient(
+        tmdb_api_key=tmdb_key,
+        region=config.region,
+        justwatch_client=jw_fallback,
+    )
+
     radarr_client = ArrClient(config.radarr_url, config.radarr_api_key)
     sonarr_client = ArrClient(config.sonarr_url, config.sonarr_api_key)
     
