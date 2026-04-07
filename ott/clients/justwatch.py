@@ -100,7 +100,9 @@ class JustWatchClient:
                         id_matched_results.append(item)
                     else:
                         item_year = getattr(item, "release_year", None)
-                        if not year or (item_year is not None and abs(item_year - year) <= 1):
+                        # Include if: no year filter provided, OR result has no
+                        # year (can't exclude), OR years are within 1 of each other.
+                        if not year or item_year is None or abs(item_year - year) <= 1:
                             year_matched_results.append(item)
                 
                 def _offer_providers_in(item, allowed):
