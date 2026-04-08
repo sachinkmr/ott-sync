@@ -1,9 +1,10 @@
-"""Unified OTT provider lookup with TMDB primary, JustWatch fallback.
+"""Unified OTT provider lookup with TMDB primary, JustWatch fallback, and
+a local SQLite cache layer that avoids hitting either API for repeated lookups.
 
-TMDB's /watch/providers endpoint returns the same JustWatch-sourced data
-but through an official, key-authenticated API with transparent rate limits
-(40 req/10s) and no IP bans. Falls back to JustWatch title-search for items
-missing a tmdb_id (~5% of catalogue).
+Cache TTL: 30 days (configurable). After TTL, the next lookup re-queries the
+APIs and refreshes the cache row. Manual overrides (inserted via the
+``set_manual`` method or a future CLI command) use the same cache table and
+follow the same TTL, keeping the data fresh.
 """
 
 import logging
@@ -15,26 +16,34 @@ from ..utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger("ott-hooks")
 
+# Sentinel to distinguish "cache miss" from "cached as not-on-OTT ([])"
+_CACHE_MISS = None
+
 
 class OTTProviderClient:
-    """Dual-backend OTT availability checker.
+    """Dual-backend OTT availability checker with a local cache.
 
-    Primary:  TMDB ``/watch/providers`` (by tmdb_id, exact, fast)
-    Fallback: JustWatch GraphQL (by title search, fuzzy, slower)
+    Lookup order:
+    1. Local SQLite cache (``JustWatchCache``) — instant, no network.
+    2. TMDB ``/watch/providers`` (by tmdb_id, exact, fast).
+    3. JustWatch GraphQL (by title search, fuzzy, slower).
 
-    Both share the same underlying provider data (TMDB sources from JustWatch).
+    Results from steps 2-3 are stored in the cache for ``cache_ttl_days``
+    (default 30). Manual overrides go into the same cache and follow the
+    same TTL so they auto-refresh.
 
     Usage::
 
         client = OTTProviderClient(
             tmdb_api_key="...",
             region="IN",
-            justwatch_client=existing_jw_client,  # for fallback
+            justwatch_client=existing_jw_client,
+            cache=existing_cache_instance,
         )
         providers = client.get_providers(
             title="Stranger Things",
             year=2016,
-            allowed_providers={"Netflix", "Prime Video"},
+            allowed_providers={"Netflix"},
             tmdb_id=66732,
             media_type="tv",
         )
@@ -47,6 +56,8 @@ class OTTProviderClient:
         tmdb_api_key: str,
         region: str = "IN",
         justwatch_client=None,
+        cache=None,
+        cache_ttl_days: int = 30,
         rate_limit_calls: int = 40,
         rate_limit_period: int = 10,
         timeout: int = 15,
@@ -54,6 +65,8 @@ class OTTProviderClient:
         self.tmdb_api_key = tmdb_api_key
         self.region = region
         self.justwatch = justwatch_client
+        self.cache = cache
+        self.cache_ttl_days = cache_ttl_days
         self.timeout = timeout
         self._session = requests.Session()
         self.rate_limiter = RateLimiter(
@@ -63,7 +76,8 @@ class OTTProviderClient:
         logger.info(
             f"[OTT] Initialized dual-backend provider client "
             f"(TMDB primary @ {rate_limit_calls}/{rate_limit_period}s, "
-            f"JustWatch fallback {'enabled' if justwatch_client else 'disabled'})"
+            f"JustWatch fallback {'enabled' if justwatch_client else 'disabled'}, "
+            f"cache {'enabled' if cache else 'disabled'})"
         )
 
     def get_providers(
@@ -76,6 +90,10 @@ class OTTProviderClient:
         media_type: str = "movie",
     ) -> Optional[list[str]]:
         """Check OTT availability for a title.
+
+        Lookup order: cache → TMDB → JustWatch. Results are cached for
+        ``cache_ttl_days`` (default 30). Empty results ("not on OTT") are
+        also cached so we don't re-query every cron cycle.
 
         Args:
             title: Movie or series title (used for JustWatch fallback).
@@ -90,31 +108,115 @@ class OTTProviderClient:
             Empty list if not found on any allowed providers.
             None if all lookups failed (infrastructure error).
         """
-        # Normalize media type for TMDB endpoint
         tmdb_type = "tv" if media_type in ("series", "tv") else "movie"
 
-        # ── Primary: TMDB Watch Providers (by tmdb_id) ──
+        # ── 1. Check local cache ──
+        if self.cache:
+            cached = self.cache.get(
+                title, year, self.region, tmdb_type,
+                tmdb_id=tmdb_id, imdb_id=imdb_id,
+            )
+            if cached is not None:
+                # cached is [] (not on OTT) or ["Netflix", ...] (on OTT)
+                found = [p for p in cached if p in allowed_providers]
+                if found:
+                    logger.info(f"[OTT-CACHE] HIT '{title}' → {found}")
+                    return found
+                if cached:
+                    # Cached providers exist but none match allowed list
+                    logger.debug(f"[OTT-CACHE] HIT '{title}' but not on allowed (cached: {cached})")
+                    return []
+                # cached == [] means "confirmed not on OTT" in cache
+                logger.debug(f"[OTT-CACHE] HIT '{title}' → not on OTT (cached empty)")
+                return []
+
+        # ── 2. TMDB Watch Providers (primary) ──
+        result = _CACHE_MISS
         if tmdb_id and self.tmdb_api_key:
             result = self._tmdb_lookup(tmdb_id, tmdb_type, allowed_providers, title)
             if result is None:
                 pass  # API failure → fall through to JW
             elif result:
-                return result  # Found on allowed providers → done
-            # result == [] means TMDB says "not on allowed providers". Its data
-            # can be incomplete for some regions, so also check JustWatch as a
-            # second opinion before declaring "not found".
+                self._store_in_cache(title, year, tmdb_type, result, tmdb_id, imdb_id)
+                return result
 
-        # ── Fallback / second opinion: JustWatch title search ──
+        # ── 3. JustWatch fallback / second opinion ──
         if self.justwatch:
-            reason = "no tmdb_id" if not tmdb_id else "TMDB empty/failed"
-            logger.info(f"[OTT] Checking JustWatch for '{title}' ({reason})")
-            return self.justwatch.get_providers(
+            logger.info(f"[OTT] Checking JustWatch for '{title}'")
+            jw_result = self.justwatch.get_providers(
                 title, year, allowed_providers,
                 tmdb_id=tmdb_id, imdb_id=imdb_id,
             )
+            if jw_result is not None:
+                self._store_in_cache(title, year, tmdb_type, jw_result, tmdb_id, imdb_id)
+                return jw_result
 
-        logger.error(f"[OTT] No backend available for '{title}'")
+        # ── 4. Both failed → store empty if TMDB returned [] ──
+        if result is not None and not result:
+            # TMDB said "not on allowed providers" and JW also failed/empty
+            self._store_in_cache(title, year, tmdb_type, [], tmdb_id, imdb_id)
+            return []
+
+        logger.error(f"[OTT] All backends failed for '{title}'")
         return None
+
+    def _store_in_cache(
+        self,
+        title: str,
+        year: Optional[int],
+        item_type: str,
+        providers: list[str],
+        tmdb_id: Optional[int],
+        imdb_id: Optional[str],
+    ) -> None:
+        """Store a lookup result in the local cache."""
+        if not self.cache:
+            return
+        # Override the cache's built-in TTL to use our 30-day window
+        self.cache.ttl_found_days = self.cache_ttl_days
+        self.cache.ttl_not_found_hours = self.cache_ttl_days * 24
+        self.cache.set(
+            title, year, self.region, item_type,
+            providers=providers,
+            tmdb_id=tmdb_id, imdb_id=imdb_id,
+        )
+
+    def set_manual(
+        self,
+        title: str,
+        year: Optional[int],
+        providers: list[str],
+        media_type: str = "movie",
+        tmdb_id: Optional[int] = None,
+        imdb_id: Optional[str] = None,
+    ) -> bool:
+        """Manually set OTT provider availability for a title.
+
+        Inserts (or updates) a cache row so the next lookup returns these
+        providers without hitting any API. Follows the same TTL as regular
+        cached entries (default 30 days), after which the APIs re-check.
+
+        Use this for titles where TMDB + JustWatch have data gaps (e.g.
+        The Simpsons on JioHotstar in India).
+
+        Args:
+            title: Movie or series title.
+            year: Release year.
+            providers: List of provider names (e.g. ["JioHotstar"]).
+            media_type: "movie" or "series"/"tv".
+            tmdb_id: Optional TMDB ID for cache key.
+            imdb_id: Optional IMDb ID for cache key.
+
+        Returns:
+            True if stored successfully.
+        """
+        if not self.cache:
+            logger.error("[OTT] Cannot set manual override: no cache configured")
+            return False
+        item_type = "tv" if media_type in ("series", "tv") else "movie"
+        self._store_in_cache(title, year, item_type, providers, tmdb_id, imdb_id)
+        logger.info(f"[OTT-MANUAL] Set '{title}' → {providers} (TTL {self.cache_ttl_days}d)")
+        return True
 
     def _tmdb_lookup(
         self,

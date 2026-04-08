@@ -38,22 +38,17 @@ class TestSetAndGet:
         got = cache.get("Stranger Things", 2016, "IN", "series", tmdb_id=66732)
         assert got == ["Netflix"]
 
-    def test_not_found_cached_but_get_returns_none(self, cache):
-        """Known issue: get() conflates cache-miss with cached-not-found.
+    def test_not_found_cached_returns_empty_list(self, cache):
+        """Cached 'not on OTT' entries return [] (not None).
 
-        set() with providers=[] stores the row (with ttl_not_found_hours TTL),
-        but get() returns None instead of [], so callers re-query JustWatch
-        every time. The TTL distinction on write is wasted. Tracked as a
-        follow-up to Phase 7 - not fixed here because there are no live
-        callers of get()/set() today (JustWatchCache is currently unused
-        by managers). See ott/utils/cache.py:118.
+        This allows callers to distinguish cache-miss (None) from
+        'confirmed not on OTT' ([]), avoiding unnecessary API re-queries.
         """
         cache.set("Indie Movie", 2023, "IN", "movie", providers=[], tmdb_id=1)
-        # Entry exists in the DB
         stats = cache.get_stats()
         assert stats["total_entries"] == 1
-        # But get() returns None for it
-        assert cache.get("Indie Movie", 2023, "IN", "movie", tmdb_id=1) is None
+        result = cache.get("Indie Movie", 2023, "IN", "movie", tmdb_id=1)
+        assert result == []
 
     def test_region_isolation(self, cache):
         """Same movie in different regions caches independently."""

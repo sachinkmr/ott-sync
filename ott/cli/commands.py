@@ -3,7 +3,7 @@
 import logging
 import time
 import threading
-from typing import Callable
+from typing import Callable, Optional
 
 import typer
 import uvicorn
@@ -212,6 +212,43 @@ def register_commands(get_radarr_mgr: Callable, get_sonarr_mgr: Callable, fastap
         logger.info("\n" + "=" * 60)
         logger.info("Tag reset complete! Run 'python main.py cron' to reprocess.")
         logger.info("=" * 60)
+
+    @app.command()
+    def set_provider(
+        title: str = typer.Argument(..., help="Title of the movie or series"),
+        providers: str = typer.Argument(..., help="Comma-separated provider names (e.g. 'JioHotstar,Netflix')"),
+        media_type: str = typer.Option("tv", help="'movie' or 'tv'"),
+        year: Optional[int] = typer.Option(None, help="Release year"),
+        tmdb_id: Optional[int] = typer.Option(None, help="TMDB ID for precise cache key"),
+    ):
+        """Manually set OTT provider availability for a title.
+
+        Inserts a cache entry so subsequent lookups return these providers
+        without hitting TMDB or JustWatch. Useful for titles where the APIs
+        have data gaps (e.g. The Simpsons on JioHotstar in India).
+
+        The entry follows the same 30-day TTL as API-sourced cache entries,
+        after which the APIs will re-check and either confirm or update.
+
+        Examples:
+            python main.py set-provider "The Simpsons" "JioHotstar" --media-type tv --year 1989 --tmdb-id 456
+            python main.py set-provider "Some Movie" "Netflix,Amazon Prime Video" --media-type movie --year 2024
+        """
+        provider_list = [p.strip() for p in providers.split(",") if p.strip()]
+        if not provider_list:
+            logger.error("No providers specified")
+            raise typer.Exit(1)
+
+        ott_client = get_radarr_mgr().justwatch
+        ok = ott_client.set_manual(
+            title=title, year=year, providers=provider_list,
+            media_type=media_type, tmdb_id=tmdb_id,
+        )
+        if ok:
+            logger.info(f"✅ Set '{title}' → {provider_list}")
+        else:
+            logger.error(f"Failed to set provider for '{title}'")
+            raise typer.Exit(1)
 
     @app.command()
     def server(

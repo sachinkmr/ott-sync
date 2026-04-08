@@ -74,6 +74,7 @@ def reload_configuration():
             tmdb_api_key=tmdb_key,
             region=config.region,
             justwatch_client=jw_fallback,
+            cache=_justwatch_cache,
         )
 
         radarr_client = ArrClient(config.radarr_url, config.radarr_api_key)
@@ -305,6 +306,7 @@ def main():
         tmdb_api_key=tmdb_key,
         region=config.region,
         justwatch_client=jw_fallback,
+        cache=_justwatch_cache,
     )
 
     radarr_client = ArrClient(config.radarr_url, config.radarr_api_key)

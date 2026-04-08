@@ -115,7 +115,7 @@ class JustWatchCache:
                         self._handle_cache_hit(session, cache_entry)
                         providers = json.loads(cache_entry.providers_json) if cache_entry.providers_json else []
                         logger.debug(f"[CACHE] HIT (TMDB {tmdb_id}): {len(providers)} providers")
-                        return providers if providers else None
+                        return providers  # [] means "cached as not-on-OTT"
                 
                 # Try exact match by IMDB ID
                 if imdb_id:
@@ -129,7 +129,7 @@ class JustWatchCache:
                         self._handle_cache_hit(session, cache_entry)
                         providers = json.loads(cache_entry.providers_json) if cache_entry.providers_json else []
                         logger.debug(f"[CACHE] HIT (IMDB {imdb_id}): {len(providers)} providers")
-                        return providers if providers else None
+                        return providers  # [] means "cached as not-on-OTT"
                 
                 # Fallback: try title + year match
                 cache_entry = session.query(JustWatchCacheModel).filter(
