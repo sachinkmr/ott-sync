@@ -1211,23 +1211,29 @@ class OTTBaseManager(ABC):
         media_type = self.item_type()  # "movie" or "series"
         tmdb_media = "movie" if media_type == "movie" else "tv"
 
-        # Fetch structured rating for the gate
+        # Fetch structured rating for the gate.
+        # For anime-detected items, use AniList score + AniList trending
+        # (TMDB has poor anime coverage). For everything else, use TMDB.
         rating_result = None
         trending = False
-        if self.tmdb_client and tmdb_id and self.auto_download and self.rating_gate_enabled:
-            raw = self.tmdb_client.get_rating(
-                tmdb_id, tmdb_media,
-                min_vote_count=self.rating_gate_min_vote_count,
-            )
-            if raw:
-                rating_result = RatingResult(
-                    score_pct=raw["score_pct"],
-                    source=raw["source"],
-                    vote_count=raw["vote_count"],
+        is_anime = self.anime_detected_tag in current_tags
+        if self.auto_download and self.rating_gate_enabled:
+            if is_anime and self.anilist_client:
+                rating_result, trending = self._fetch_anilist_rating_for_gate(title, year)
+            elif self.tmdb_client and tmdb_id:
+                raw = self.tmdb_client.get_rating(
+                    tmdb_id, tmdb_media,
+                    min_vote_count=self.rating_gate_min_vote_count,
                 )
-            trending = self.tmdb_client.is_trending(
-                tmdb_id, tmdb_media, self.rating_gate_trending_window,
-            )
+                if raw:
+                    rating_result = RatingResult(
+                        score_pct=raw["score_pct"],
+                        source=raw["source"],
+                        vote_count=raw["vote_count"],
+                    )
+                trending = self.tmdb_client.is_trending(
+                    tmdb_id, tmdb_media, self.rating_gate_trending_window,
+                )
 
         result = decide(
             auto_download=self.auto_download,
@@ -1296,6 +1302,69 @@ class OTTBaseManager(ABC):
                 f"[RATING-GATE] Deferred {title} "
                 f"(re-check in {self.rating_gate_defer_days} days)"
             )
+
+    def _fetch_anilist_rating_for_gate(
+        self, title: str, year: int | None,
+    ) -> tuple:
+        """Fetch AniList score + trending for an anime-detected item.
+
+        Searches AniList by title to find the anilist_id, then fetches
+        rating and popularity data. Used instead of TMDB for anime items
+        because TMDB has poor anime score/trending coverage.
+
+        Returns:
+            (RatingResult | None, bool) — rating result and trending flag.
+        """
+        from .decision import RatingResult
+
+        if not self.anilist_client or not title:
+            return None, False
+
+        try:
+            # Search AniList for this anime
+            results = self.anilist_client.search_anime(title, year)
+            if not results:
+                logger.debug(f"[RATING-GATE] No AniList results for '{title}'")
+                return None, False
+
+            best = self.anilist_client.get_best_match(results, title, year)
+            if not best:
+                return None, False
+
+            anilist_id = best.get("id")
+            if not anilist_id:
+                return None, False
+
+            # Fetch rating + popularity
+            data = self.anilist_client.get_rating_and_popularity(anilist_id)
+            if not data:
+                return None, False
+
+            score_pct = data.get("score_pct")
+            al_trending = data.get("trending", 0)
+
+            rating_result = None
+            if score_pct is not None:
+                rating_result = RatingResult(
+                    score_pct=score_pct,
+                    source="anilist",
+                    vote_count=data.get("popularity", 0),
+                )
+
+            # AniList "trending" is a rank (lower = more trending, 0 = not).
+            # Treat anything with a non-zero trending value as "trending".
+            is_trending = al_trending > 0
+
+            logger.info(
+                f"[RATING-GATE] AniList rating for '{title}': "
+                f"score={score_pct}%, popularity={data.get('popularity')}, "
+                f"trending={'yes' if is_trending else 'no'}"
+            )
+            return rating_result, is_trending
+
+        except Exception as e:
+            logger.error(f"[RATING-GATE] AniList rating fetch failed for '{title}': {e}")
+            return None, False
 
     def _unmonitor_item(self, item_id: int) -> None:
         """Set monitored=False on an item."""
@@ -1430,10 +1499,13 @@ class OTTBaseManager(ABC):
                 PendingEvaluationRepository.delete(row["id"])
                 continue
 
-            # Re-fetch rating
+            # Re-fetch rating (AniList for anime, TMDB for everything else)
             rating_result = None
             trending = False
-            if self.tmdb_client and tmdb_id:
+            is_anime = self.anime_detected_tag in item_tags
+            if is_anime and self.anilist_client:
+                rating_result, trending = self._fetch_anilist_rating_for_gate(title, item_data.get("year"))
+            elif self.tmdb_client and tmdb_id:
                 raw = self.tmdb_client.get_rating(
                     tmdb_id, tmdb_media,
                     min_vote_count=self.rating_gate_min_vote_count,

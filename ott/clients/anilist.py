@@ -153,6 +153,62 @@ class AniListClient:
             logger.error(f"[ANILIST] Rating error: {e}")
             return None
     
+    def get_rating_and_popularity(self, anilist_id: int) -> Optional[dict]:
+        """Fetch anime rating AND popularity rank from AniList.
+
+        Used by the rating gate for anime-detected items instead of TMDB.
+
+        Args:
+            anilist_id: AniList media ID
+
+        Returns:
+            {"score_pct": 78.0, "popularity": 45000, "trending": 5} or None.
+            score_pct is 0-100 (AniList's native scale). popularity is the
+            absolute popularity count (higher = more popular). trending is
+            the current trending rank (lower = more trending, 0 = not trending).
+        """
+        query = """
+        query ($id: Int) {
+          Media(id: $id, type: ANIME) {
+            averageScore
+            popularity
+            trending
+          }
+        }
+        """
+        variables = {"id": anilist_id}
+
+        def _fetch():
+            try:
+                response = self._session.post(
+                    self.GRAPHQL_URL,
+                    json={"query": query, "variables": variables},
+                    timeout=self.timeout,
+                )
+                if response.status_code == 429:
+                    raise AniListRateLimitError("AniList rate limit exceeded")
+                if not response.ok:
+                    return None
+                data = response.json()
+                if "errors" in data:
+                    return None
+                media = data.get("data", {}).get("Media", {})
+                score = media.get("averageScore")  # 0-100 or null
+                return {
+                    "score_pct": float(score) if score else None,
+                    "popularity": media.get("popularity", 0),
+                    "trending": media.get("trending", 0),
+                }
+            except requests.RequestException as e:
+                logger.error(f"[ANILIST] Rating+popularity fetch failed: {e}")
+                return None
+
+        try:
+            return self.rate_limiter.execute(_fetch, timeout=self.timeout + 5)
+        except Exception as e:
+            logger.error(f"[ANILIST] Rating+popularity error: {e}")
+            return None
+
     def search_anime(
         self,
         title: str,
