@@ -47,11 +47,12 @@ from ott.utils.reload import ConfigReloader
 # Global state for hot reload
 _managers = {}  # Stores radarr, sonarr, and telegram for hot reload
 _config_path = None
+_justwatch_cache = None  # Set in main(), used by reload_configuration()
 
 
 def reload_configuration():
     """Reload configuration and reinitialize components"""
-    global _managers, _config_path
+    global _managers, _config_path, _justwatch_cache
     
     logger.info("🔄 Reloading configuration...")
     
@@ -208,7 +209,7 @@ def reload_configuration():
 
 def main():
     """Initialize and run OTT Hooks application"""
-    global _managers, _config_path
+    global _managers, _config_path, _justwatch_cache
     
     # Load configuration
     try:
