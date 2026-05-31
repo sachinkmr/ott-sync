@@ -42,10 +42,13 @@ above the threshold lands, we unmonitor.
    - **Season:** unmonitor a season only when *every* episode in that season has a
      file **and** every file is ≥ threshold. One missing or sub-threshold episode
      keeps the season monitored.
-   - **Series:** unmonitor the series only when *all* episodes across all seasons
-     are present at ≥ threshold **and** `series.status == "ended"`. A
+   - **Series:** unmonitor the series only when *all* **non-special**
+     (`seasonNumber > 0`) episodes are present at ≥ threshold **and**
+     `series.status == "ended"`. Specials (season 0) are excluded from this check
+     (commonly unmonitored/absent and would otherwise block it forever). A
      `continuing` series is never unmonitored at the series level, so future
-     episodes/seasons keep flowing.
+     episodes/seasons keep flowing. When the series is unmonitored, only
+     non-special season flags + episodes are flipped; season 0 is left untouched.
 4. **Override skip:** items carrying `ott-override` are left fully alone (honors
    the existing invariant). This is the *only* skip condition.
 5. **Manual adds are unmonitored** on download (they are not skipped). The import
@@ -147,9 +150,10 @@ Base implementation (used by Radarr):
 3. **Per affected season number:** if every episode in that season has a file and
    every file ≥ threshold → add all that season's episode ids to `to_unmonitor`
    and mark `seasons[].monitored=false`.
-4. **Series:** if every episode across the series has a file at ≥ threshold **and**
-   `series.status == "ended"` → add all episode ids, set every season flag false,
-   set `series.monitored=false`.
+4. **Series:** if every **non-special** (`seasonNumber > 0`) episode has a file at
+   ≥ threshold **and** `series.status == "ended"` → add all non-special episode
+   ids, set every non-special season flag false, set `series.monitored=false`.
+   Season 0 (specials) is left untouched.
 5. **Apply:** one `PUT episode/monitor {episodeIds:list(to_unmonitor), monitored:false}`
    if non-empty; one `PUT series/{id}` only if any season/series flag changed.
 
@@ -168,6 +172,10 @@ Helper `_episode_settled(ep, thr)` = `ep.hasFile and resolution(ep.episodeFile) 
   not "complete" → left monitored. Safe for ongoing shows.
 - **Continuing series:** never unmonitored at the series level (only `ended` +
   fully present at quality). Future seasons keep flowing.
+- **Specials (season 0):** excluded from the series-complete check so unobtained
+  specials never block series-level unmonitor; left untouched when the series is
+  unmonitored. A season-0 import is still handled by the season-level roll-up like
+  any other season.
 - **Backfilled/legacy episodes:** when a season/series completes, *all* its
   episode ids are unmonitored (not just the just-imported one), so episodes that
   predate this feature are reconciled.
