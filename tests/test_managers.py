@@ -387,3 +387,186 @@ def test_series_fully_downloaded(arr_mock, mock_justwatch, mock_telegram):
     # only specials -> no main episodes -> False
     only_special = [_ep(99, 0, True, 1080)]
     assert m._series_fully_downloaded(only_special, 720) is False
+
+
+def _sonarr_client(series, episodes, tags):
+    """Sonarr ArrClient mock: GET tag/episode/series, capture PUTs.
+
+    `series` is the single series dict (returned for GET series/<id>).
+    `episodes` is the full episode list (returned for GET episode).
+    """
+    client = Mock()
+    client.url = "http://sonarr:8989"
+
+    def _get(endpoint, **kwargs):
+        res = Mock()
+        res.status_code = 200
+        if endpoint == "tag":
+            res.json.return_value = tags
+            return res
+        if endpoint == "episode":
+            res.json.return_value = episodes
+            return res
+        if endpoint.startswith("series/"):
+            res.json.return_value = series
+            return res
+        return None
+
+    client.get = Mock(side_effect=_get)
+    client.put = Mock(return_value=Mock(status_code=200))
+    client.post = Mock(return_value=Mock(status_code=200))
+    return client
+
+
+def _series_payload(series_id=5, episodes=None, resolution=1080):
+    """Webhook Download payload: imports the LAST episode in `episodes`."""
+    episodes = episodes or []
+    imported = episodes[-1] if episodes else {"id": 0, "seasonNumber": 1}
+    return {
+        "eventType": "Download",
+        "series": {"id": series_id, "title": "Show", "year": 2020, "tags": []},
+        "episodes": [{"id": imported["id"], "seasonNumber": imported["seasonNumber"]}],
+        "episodeFile": {"quality": {"quality": {"resolution": resolution}}},
+    }
+
+
+def _ep_monitor_calls(client):
+    return [c for c in client.put.call_args_list if c.args and c.args[0] == "episode/monitor"]
+
+
+def test_sonarr_episode_only_incomplete_season(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    # S1: E1 imported 1080; E2,E3 not yet downloaded -> season incomplete
+    episodes = [_ep(1, 1, True, 1080), _ep(2, 1, False, 0), _ep(3, 1, False, 0)]
+    series = {"id": 5, "status": "continuing", "monitored": True,
+              "seasons": [{"seasonNumber": 1, "monitored": True}]}
+    client = _sonarr_client(series, episodes, sample_tag_response)
+    m = _sonarr(client, mock_justwatch, mock_telegram)
+    payload = _series_payload(episodes=[_ep(1, 1, True, 1080)], resolution=1080)
+    m._handle_download_complete(payload, payload["series"], 5, "Show")
+    ep_calls = _ep_monitor_calls(client)
+    assert ep_calls and ep_calls[-1].kwargs["json"]["episodeIds"] == [1]
+    assert ep_calls[-1].kwargs["json"]["monitored"] is False
+    assert not _puts_to(client, "series/5")  # season not complete -> no series PUT
+
+
+def test_sonarr_season_complete_continuing_series(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    # S1 fully downloaded; series continuing -> unmonitor season, NOT series
+    episodes = [_ep(1, 1, True, 1080), _ep(2, 1, True, 1080), _ep(3, 1, True, 1080)]
+    series = {"id": 5, "status": "continuing", "monitored": True,
+              "seasons": [{"seasonNumber": 1, "monitored": True}]}
+    client = _sonarr_client(series, episodes, sample_tag_response)
+    m = _sonarr(client, mock_justwatch, mock_telegram)
+    payload = _series_payload(episodes=episodes, resolution=1080)  # imports E3
+    m._handle_download_complete(payload, payload["series"], 5, "Show")
+    ep_calls = _ep_monitor_calls(client)
+    assert ep_calls and ep_calls[-1].kwargs["json"]["episodeIds"] == [1, 2, 3]
+    series_puts = _puts_to(client, "series/5")
+    assert series_puts, "expected a series PUT to flip the season flag"
+    body = series_puts[-1].kwargs["json"]
+    assert body["seasons"][0]["monitored"] is False  # season 1 unmonitored
+    assert body["monitored"] is True  # continuing series stays monitored
+
+
+def test_sonarr_ended_series_fully_downloaded(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    episodes = [_ep(1, 1, True, 1080), _ep(2, 1, True, 1080), _ep(3, 2, True, 720)]
+    series = {"id": 5, "status": "ended", "monitored": True,
+              "seasons": [{"seasonNumber": 1, "monitored": True},
+                          {"seasonNumber": 2, "monitored": True}]}
+    client = _sonarr_client(series, episodes, sample_tag_response)
+    m = _sonarr(client, mock_justwatch, mock_telegram)
+    payload = _series_payload(episodes=episodes, resolution=720)  # imports E3 (S2)
+    m._handle_download_complete(payload, payload["series"], 5, "Show")
+    ep_calls = _ep_monitor_calls(client)
+    assert ep_calls and ep_calls[-1].kwargs["json"]["episodeIds"] == [1, 2, 3]
+    body = _puts_to(client, "series/5")[-1].kwargs["json"]
+    assert body["monitored"] is False
+    assert all(s["monitored"] is False for s in body["seasons"])
+
+
+def test_sonarr_continuing_series_not_unmonitored_at_series_level(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    # All episodes downloaded but series continuing -> only the imported season flips
+    episodes = [_ep(1, 1, True, 1080), _ep(2, 1, True, 1080), _ep(3, 2, True, 720)]
+    series = {"id": 5, "status": "continuing", "monitored": True,
+              "seasons": [{"seasonNumber": 1, "monitored": True},
+                          {"seasonNumber": 2, "monitored": True}]}
+    client = _sonarr_client(series, episodes, sample_tag_response)
+    m = _sonarr(client, mock_justwatch, mock_telegram)
+    payload = _series_payload(episodes=episodes, resolution=720)  # imports E3 (S2)
+    m._handle_download_complete(payload, payload["series"], 5, "Show")
+    body = _puts_to(client, "series/5")[-1].kwargs["json"]
+    assert body["monitored"] is True  # series NOT unmonitored
+    s1 = next(s for s in body["seasons"] if s["seasonNumber"] == 1)
+    s2 = next(s for s in body["seasons"] if s["seasonNumber"] == 2)
+    assert s1["monitored"] is True   # untouched (not the imported season)
+    assert s2["monitored"] is False  # imported season, complete -> unmonitored
+
+
+def test_sonarr_mixed_quality_season_stays_monitored(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    # S1: E1 1080, E2 480 (downloaded but sub-threshold), E3 1080 imported
+    episodes = [_ep(1, 1, True, 1080), _ep(2, 1, True, 480), _ep(3, 1, True, 1080)]
+    series = {"id": 5, "status": "continuing", "monitored": True,
+              "seasons": [{"seasonNumber": 1, "monitored": True}]}
+    client = _sonarr_client(series, episodes, sample_tag_response)
+    m = _sonarr(client, mock_justwatch, mock_telegram)
+    payload = _series_payload(episodes=episodes, resolution=1080)  # imports E3
+    m._handle_download_complete(payload, payload["series"], 5, "Show")
+    ep_calls = _ep_monitor_calls(client)
+    assert ep_calls and ep_calls[-1].kwargs["json"]["episodeIds"] == [3]  # only imported
+    assert not _puts_to(client, "series/5")  # 480p E2 keeps season monitored
+
+
+def test_sonarr_unknown_resolution_import_no_writes(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    # Imported file reports resolution 0 (e.g. SDTV) -> keep monitored, no writes
+    episodes = [_ep(1, 1, True, 0), _ep(2, 1, False, 0)]
+    series = {"id": 5, "status": "continuing", "monitored": True,
+              "seasons": [{"seasonNumber": 1, "monitored": True}]}
+    client = _sonarr_client(series, episodes, sample_tag_response)
+    m = _sonarr(client, mock_justwatch, mock_telegram)
+    payload = _series_payload(episodes=[_ep(1, 1, True, 0)], resolution=0)
+    m._handle_download_complete(payload, payload["series"], 5, "Show")
+    assert not _ep_monitor_calls(client)
+    assert not _puts_to(client, "series/5")
+
+
+def test_sonarr_idempotent_already_unmonitored(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    # Season already fully unmonitored -> re-import issues NO writes
+    episodes = [_ep(1, 1, True, 1080, monitored=False),
+                _ep(2, 1, True, 1080, monitored=False),
+                _ep(3, 1, True, 1080, monitored=False)]
+    series = {"id": 5, "status": "continuing", "monitored": True,
+              "seasons": [{"seasonNumber": 1, "monitored": False}]}
+    client = _sonarr_client(series, episodes, sample_tag_response)
+    m = _sonarr(client, mock_justwatch, mock_telegram)
+    payload = _series_payload(episodes=episodes, resolution=1080)  # re-imports E3
+    m._handle_download_complete(payload, payload["series"], 5, "Show")
+    assert not _ep_monitor_calls(client)
+    assert not _puts_to(client, "series/5")
+
+
+def test_sonarr_override_item_skipped_via_added_hook(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    episodes = [_ep(1, 1, True, 1080)]
+    series = {"id": 5, "status": "ended", "monitored": True,
+              "seasons": [{"seasonNumber": 1, "monitored": True}]}
+    client = _sonarr_client(series, episodes, sample_tag_response)
+    m = _sonarr(client, mock_justwatch, mock_telegram)
+    payload = _series_payload(episodes=episodes, resolution=1080)
+    payload["series"]["tags"] = [3]  # ott-override
+    m.added_hook(payload)
+    assert not _ep_monitor_calls(client)
+    assert not _puts_to(client, "series/5")

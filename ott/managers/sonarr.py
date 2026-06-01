@@ -69,6 +69,99 @@ class SonarrManager(OTTBaseManager):
             self._episode_settled(e, threshold) for e in main_eps
         )
 
+    def _handle_download_complete(
+        self, payload: dict, item: dict, item_id: int, title: str,
+    ) -> None:
+        """Unmonitor imported episodes, rolling up to season then series.
+
+        - Episode: unmonitor each imported episode whose file is >= threshold.
+        - Season: when every episode of an affected season is settled, unmonitor
+          that whole season (its episodes + the season's monitored flag).
+        - Series: when every non-special episode is settled AND the series has
+          ended, unmonitor every non-special episode + season flag + the series.
+
+        Idempotent: only currently-monitored episodes are sent to
+        episode/monitor, and the series is PUT only when a season/series flag
+        actually changes. At most one episode/monitor PUT and one series PUT.
+        """
+        threshold = self.unmonitor_on_download_min_resolution
+        imported_eps = payload.get("episodes", []) or []
+        imported_resolution = self._file_resolution(payload.get("episodeFile"))
+
+        ep_res = self.client.get(
+            "episode",
+            params={"seriesId": item_id, "includeEpisodeFile": "true"},
+        )
+        series_res = self.client.get(f"series/{item_id}")
+        if not ep_res or not series_res:
+            logger.error(f"[UNMONITOR] Failed to fetch state for series id={item_id}")
+            return
+
+        episodes = ep_res.json()
+        series = series_res.json()
+        ep_by_id = {e["id"]: e for e in episodes if e.get("id") is not None}
+
+        # Candidate episode ids; filtered to currently-monitored ones at the end
+        # so re-processing an already-unmonitored season is a no-op.
+        candidates: set[int] = set()
+        if imported_resolution >= threshold:
+            candidates |= {e["id"] for e in imported_eps if e.get("id")}
+        else:
+            logger.info(
+                f"[UNMONITOR] series id={item_id} '{title}' imported episode at "
+                f"{imported_resolution}p < {threshold}p — keeping monitored for upgrade"
+            )
+
+        series_dirty = False
+        ended = series.get("status") == "ended"
+
+        if ended and self._series_fully_downloaded(episodes, threshold):
+            main_eps = [e for e in episodes if e.get("seasonNumber", 0) > 0]
+            candidates |= {e["id"] for e in main_eps if e.get("id")}
+            for season in series.get("seasons", []):
+                if season.get("seasonNumber", 0) > 0 and season.get("monitored"):
+                    season["monitored"] = False
+                    series_dirty = True
+            if series.get("monitored"):
+                series["monitored"] = False
+                series_dirty = True
+            logger.info(
+                f"[UNMONITOR] series id={item_id} '{title}' fully downloaded + "
+                f"ended — unmonitoring series"
+            )
+        else:
+            affected = {
+                e.get("seasonNumber") for e in imported_eps
+                if e.get("seasonNumber") is not None
+            }
+            for season_number in affected:
+                if not self._season_complete(episodes, season_number, threshold):
+                    continue
+                candidates |= {
+                    e["id"] for e in episodes
+                    if e.get("seasonNumber") == season_number and e.get("id")
+                }
+                for season in series.get("seasons", []):
+                    if (season.get("seasonNumber") == season_number
+                            and season.get("monitored")):
+                        season["monitored"] = False
+                        series_dirty = True
+                logger.info(
+                    f"[UNMONITOR] series id={item_id} '{title}' season "
+                    f"{season_number} complete — unmonitoring season"
+                )
+
+        to_unmonitor = sorted(
+            eid for eid in candidates if ep_by_id.get(eid, {}).get("monitored")
+        )
+        if to_unmonitor:
+            self.client.put(
+                "episode/monitor",
+                json={"episodeIds": to_unmonitor, "monitored": False},
+            )
+        if series_dirty:
+            self.client.put(f"series/{item_id}", json=series)
+
     def _process_webhook_locked(self, payload: dict, event: str, item: dict,
                                   title: str, year: int, item_id: int, tags: set) -> None:
         """Process webhook with item lock held
