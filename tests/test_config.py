@@ -89,14 +89,29 @@ def test_config_default_values(tmp_path):
         "sonarr_api_key": "key2",
         "ott_providers": ["Netflix"]
     }
-    
+
     config_file = tmp_path / "minimal.json"
     config_file.write_text(json.dumps(minimal_config))
-    
+
     config = Config.load(config_file)
-    
+
     # Test defaults
     assert config.telegram == {}
     assert config.region == "IN"
     assert config.cron_initial_delay_seconds == 60
     assert config.cron_interval_hours == 24
+
+
+def test_unmonitor_on_download_defaults(config):
+    """Defaults: enabled and 720p threshold when the block is absent."""
+    assert config.unmonitor_on_download_enabled is True
+    assert config.unmonitor_on_download_min_resolution == 720
+
+
+def test_unmonitor_on_download_overrides(sample_config_dict):
+    """Explicit block overrides both fields."""
+    cfg = Config(dict(sample_config_dict, unmonitor_on_download={
+        "enabled": False, "min_resolution": 1080,
+    }))
+    assert cfg.unmonitor_on_download_enabled is False
+    assert cfg.unmonitor_on_download_min_resolution == 1080

@@ -201,6 +201,16 @@ class Config:
             "tag_recheck_delay_ms", 1500,
         )
 
+        # Unmonitor-on-download: when an import (*arr "Download" event) completes,
+        # stop monitoring the movie/season/series so *arr no longer searches or
+        # upgrades it — but only once the obtained resolution meets
+        # min_resolution. Sub-threshold imports stay monitored for upgrade.
+        uod_cfg = config_dict.get("unmonitor_on_download", {}) or {}
+        self.unmonitor_on_download_enabled: bool = uod_cfg.get("enabled", True)
+        self.unmonitor_on_download_min_resolution: int = uod_cfg.get(
+            "min_resolution", 720,
+        )
+
         # ========== Torrent housekeeping (moved from scheduler service) ==========
         # Two policies fire on each tick:
         #   1. Resume torrents stuck in pausedDL/stalledDL/queuedDL/stoppedDL
