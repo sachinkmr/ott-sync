@@ -190,6 +190,8 @@ def reload_configuration():
             mgr.rating_gate_trending_window = config.rating_gate_trending_window
             mgr.rating_gate_defer_days = config.rating_gate_defer_days
             mgr.rating_gate_max_defer_attempts = config.rating_gate_max_defer_attempts
+            mgr.unmonitor_on_download_enabled = config.unmonitor_on_download_enabled
+            mgr.unmonitor_on_download_min_resolution = config.unmonitor_on_download_min_resolution
 
         _managers = new_managers
 
@@ -521,6 +523,8 @@ def main():
         mgr.rating_gate_trending_window = config.rating_gate_trending_window
         mgr.rating_gate_defer_days = config.rating_gate_defer_days
         mgr.rating_gate_max_defer_attempts = config.rating_gate_max_defer_attempts
+        mgr.unmonitor_on_download_enabled = config.unmonitor_on_download_enabled
+        mgr.unmonitor_on_download_min_resolution = config.unmonitor_on_download_min_resolution
 
     # Run anime migration if enabled
     if anime_detector and config.anime_detection.auto_run_on_startup:
