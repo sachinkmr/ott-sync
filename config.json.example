@@ -33,6 +33,12 @@
   "_comment_auto_download": "Download mode: true = automatic (current behavior), false = manual approval required for ALL items",
   "auto_download": false,
 
+  "_comment_unmonitor_on_download": "After *arr finishes importing (the 'On Import' / 'Download' webhook event), unmonitor the movie/season/series so *arr stops searching & upgrading it — but only once the imported resolution is >= min_resolution. Sub-threshold imports stay monitored so a better release can still upgrade them; a later >=min_resolution upgrade then unmonitors. Sonarr rolls up: episode -> season (when fully downloaded) -> series (when fully downloaded AND ended; specials excluded). Items tagged ott-override are never touched. Requires the 'On Import'/'On File Import' event enabled on the Radarr & Sonarr webhook connections.",
+  "unmonitor_on_download": {
+    "enabled": true,
+    "min_resolution": 720
+  },
+
   "_comment_wakeup": "Optional /wakeup endpoint target (Wake-on-LAN). Leave both empty to disable.",
   "wakeup": {
     "mac_address": "",

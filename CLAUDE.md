@@ -17,6 +17,7 @@ Bridges Radarr/Sonarr with JustWatch — auto-skips downloads for media already 
 Controlled by `auto_download` config flag (default: `false`).
 
 1. If item has `ott-override` tag → skip all checks (user escape hatch).
+1.5. **Import complete** (`Download` event, when `unmonitor_on_download.enabled`): unmonitor the imported item once quality ≥ `min_resolution` (default 720p), skipping `ott-override` items. Sonarr rolls up episode → season (fully downloaded) → series (fully downloaded **and** `status == "ended"`; specials/season 0 excluded). Sub-threshold imports stay monitored so a later upgrade can land. Dispatched before the OTT/manual-add logic, so import events never run a JustWatch lookup.
 2. **Automatic mode** (`auto_download: true`):
    - JustWatch lookup → on a configured provider: tag `ott-<provider>`, unmonitor, cancel any queued downloads (queue-record id DELETE, `blocklist=false`), send Telegram notification with "Download anyway" override button.
    - Not on OTT → proceed normally, download.
@@ -52,3 +53,4 @@ See [Plan.md](Plan.md) — 36 catalogued issues across phases. Phase 1 (critical
 - Webhook endpoints have no signature verification (Plan.md §2.4).
 - Deployment config lives at `/ssd/tools/docker/arrs/ott-sync/config.json` (referenced by `test_config.py::test_config_load_missing_file`, which fails because of the fallback path — Plan.md §2.8).
 - `config.telegram` is a dict now (post Plan.md §1.2); access fields with `config.telegram["key"]`, not attribute style.
+- `unmonitor_on_download` only fires if the Radarr/Sonarr webhook connections have the **"On Import" / "On File Import"** event enabled (internally `eventType: "Download"`). Without it, imports never reach ott-sync and nothing is unmonitored.
