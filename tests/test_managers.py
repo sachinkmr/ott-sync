@@ -196,3 +196,26 @@ class TestOTTBaseManager:
         # No JustWatch call, no item update
         assert not mock_justwatch.get_providers.called
         assert not arr.put.called
+
+
+def test_unmonitor_defaults(arr_mock, mock_justwatch, mock_telegram):
+    """Managers default to enabled + 720p before main.py overrides them."""
+    m = RadarrManager(
+        arr_client=arr_mock, justwatch_client=mock_justwatch,
+        telegram=mock_telegram, ott_providers={"Netflix"},
+    )
+    assert m.unmonitor_on_download_enabled is True
+    assert m.unmonitor_on_download_min_resolution == 720
+
+
+def test_file_resolution(arr_mock, mock_justwatch, mock_telegram):
+    """_file_resolution reads quality.quality.resolution, 0 when missing."""
+    m = RadarrManager(
+        arr_client=arr_mock, justwatch_client=mock_justwatch,
+        telegram=mock_telegram, ott_providers={"Netflix"},
+    )
+    assert m._file_resolution({"quality": {"quality": {"resolution": 1080}}}) == 1080
+    assert m._file_resolution({"quality": {"quality": {"resolution": 0}}}) == 0
+    assert m._file_resolution({"quality": {"quality": {}}}) == 0
+    assert m._file_resolution({}) == 0
+    assert m._file_resolution(None) == 0

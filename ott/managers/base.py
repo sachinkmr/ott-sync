@@ -85,6 +85,11 @@ class OTTBaseManager(ABC):
         self.rating_gate_trending_window: str = "week"
         self.rating_gate_defer_days: int = 7
         self.rating_gate_max_defer_attempts: int = 0
+        # Unmonitor-on-download (defaults; main.py overrides from config).
+        # After an import completes, stop monitoring the item when the obtained
+        # resolution meets the threshold so *arr stops searching/upgrading.
+        self.unmonitor_on_download_enabled: bool = True
+        self.unmonitor_on_download_min_resolution: int = 720
         self.manual_add_detection_enabled = manual_add_detection_enabled
         self.import_list_tags = import_list_tags or []
         self.manual_add_auto_apply_override = manual_add_auto_apply_override
@@ -1390,6 +1395,23 @@ class OTTBaseManager(ABC):
         except Exception as e:
             logger.error(f"[RATING-GATE] AniList rating fetch failed for '{title}': {e}")
             return None, False
+
+    def _file_resolution(self, file_obj: dict | None) -> int:
+        """Extract quality.quality.resolution (int) from an *arr file object.
+
+        Returns 0 when the object or any nesting level is missing/unknown,
+        so callers treat unknown quality as below any threshold.
+        """
+        if not file_obj:
+            return 0
+        try:
+            return int(
+                (file_obj.get("quality") or {})
+                .get("quality", {})
+                .get("resolution") or 0
+            )
+        except (AttributeError, TypeError, ValueError):
+            return 0
 
     def _unmonitor_item(self, item_id: int) -> None:
         """Set monitored=False on an item."""
