@@ -570,3 +570,52 @@ def test_sonarr_override_item_skipped_via_added_hook(
     m.added_hook(payload)
     assert not _ep_monitor_calls(client)
     assert not _puts_to(client, "series/5")
+
+
+def test_sonarr_special_season_handled_by_season_tier(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    # Importing a 1080p special into a fully-downloaded specials season (S0)
+    # unmonitors S0 at the season tier; the series-level flag stays untouched
+    # (continuing series; S0 excluded only from series-LEVEL unmonitor).
+    episodes = [_ep(1, 0, True, 1080), _ep(2, 1, True, 1080)]  # S0 complete, S1 present
+    series = {"id": 5, "status": "continuing", "monitored": True,
+              "seasons": [{"seasonNumber": 0, "monitored": True},
+                          {"seasonNumber": 1, "monitored": True}]}
+    client = _sonarr_client(series, episodes, sample_tag_response)
+    m = _sonarr(client, mock_justwatch, mock_telegram)
+    payload = _series_payload(episodes=[_ep(1, 0, True, 1080)], resolution=1080)  # imports the special
+    m._handle_download_complete(payload, payload["series"], 5, "Show")
+    ep_calls = _ep_monitor_calls(client)
+    assert ep_calls and ep_calls[-1].kwargs["json"]["episodeIds"] == [1]  # special unmonitored
+    body = _puts_to(client, "series/5")[-1].kwargs["json"]
+    s0 = next(s for s in body["seasons"] if s["seasonNumber"] == 0)
+    s1 = next(s for s in body["seasons"] if s["seasonNumber"] == 1)
+    assert s0["monitored"] is False  # season-0 flag flipped by the season tier
+    assert s1["monitored"] is True   # untouched (not the imported season)
+    assert body["monitored"] is True  # series-level untouched (continuing)
+
+
+def test_sonarr_fetch_failure_no_writes(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    # If the series GET fails, the handler returns without any episode/series PUT.
+    episodes = [_ep(1, 1, True, 1080)]
+    series = {"id": 5, "status": "ended", "monitored": True,
+              "seasons": [{"seasonNumber": 1, "monitored": True}]}
+    client = _sonarr_client(series, episodes, sample_tag_response)
+
+    def _get_series_fails(endpoint, **kwargs):
+        if endpoint == "episode":
+            res = Mock()
+            res.status_code = 200
+            res.json.return_value = episodes
+            return res
+        return None  # series GET (and anything else) fails
+
+    client.get = Mock(side_effect=_get_series_fails)
+    m = _sonarr(client, mock_justwatch, mock_telegram)
+    payload = _series_payload(episodes=episodes, resolution=1080)
+    m._handle_download_complete(payload, payload["series"], 5, "Show")
+    assert not _ep_monitor_calls(client)
+    assert not _puts_to(client, "series/5")
