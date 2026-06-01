@@ -409,6 +409,109 @@ def main():
         **manual_add_kwargs,
     )
 
+    # ========== Torrent housekeeping manager (optional) ==========
+    # Moved from the standalone scheduler service. When enabled, this manager
+    # owns qBittorrent maintenance: resume stalled torrents and delete
+    # completed-and-already-imported torrents (with a hardlink-count safety
+    # check so we never delete a torrent whose files *arr hasn't imported yet).
+    # The cron loop itself is registered later in register_commands -> run_all.
+    if config.torrent_housekeeping_enabled:
+        logger.info("🧹 Initializing torrent housekeeping manager...")
+        from ott.clients.qbittorrent import QBittorrentClient
+        from ott.managers.torrent_housekeeping import TorrentHousekeepingManager
+        try:
+            qbt_client = QBittorrentClient(
+                url=config.torrent_housekeeping_qbt_url,
+                username=config.torrent_housekeeping_qbt_username,
+                password=config.torrent_housekeeping_qbt_password,
+                cookie_jar_path=config.torrent_housekeeping_cookie_jar,
+            )
+            _managers['torrent_housekeeping'] = TorrentHousekeepingManager(
+                qbt=qbt_client,
+                min_age_minutes=config.torrent_housekeeping_min_age_minutes,
+            )
+            logger.info(
+                f"  ✓ Torrent housekeeping ready (qbt={config.torrent_housekeeping_qbt_url}, "
+                f"interval={config.torrent_housekeeping_interval_minutes}min, "
+                f"min_age={config.torrent_housekeeping_min_age_minutes}min)"
+            )
+        except Exception as e:
+            logger.error(f"  ✗ Failed to init torrent housekeeping: {e}", exc_info=True)
+            logger.warning("  ⚠ Continuing without torrent housekeeping")
+            _managers['torrent_housekeeping'] = None
+    else:
+        logger.info("🧹 Torrent housekeeping disabled by config")
+        _managers['torrent_housekeeping'] = None
+
+    # ========== Dead-media manager (Phase A: detect + notify only) ==========
+    # Sister manager to housekeeping. Where housekeeping is fast (10min) and
+    # silent (just resume/delete), dead_media runs slower (30min) and noisy
+    # — it sends Telegram alerts when torrents are stuck-stuck (metaDL+0seeds
+    # past the timeout, completed-but-not-imported past the fallback, etc.).
+    #
+    # Phase A is read-only: it detects, groups by series/movie, sends one
+    # Telegram message per group with episode list. No action buttons, no
+    # destructive *arr calls — that's phase B.
+    #
+    # Reuses the same QBittorrentClient as housekeeping (one cookie jar,
+    # one auth session) — we pull it back out of _managers via the attribute
+    # rather than constructing a second client.
+    if config.dead_media_enabled:
+        logger.info("🩹 Initializing dead-media manager...")
+        from ott.managers.dead_media import DeadMediaManager
+        try:
+            # Only build a qbt client if housekeeping didn't already make one.
+            # If housekeeping is disabled, we'd need our own — but then
+            # there's no place a recent cookie jar would have been saved, so
+            # this is the rare path.
+            qbt_for_dead = None
+            hk_mgr = _managers.get('torrent_housekeeping')
+            if hk_mgr is not None:
+                qbt_for_dead = hk_mgr.qbt
+            else:
+                # Construct independently using the housekeeping config —
+                # dead-media doesn't get its own qbt creds section.
+                if not config.torrent_housekeeping_qbt_url:
+                    raise RuntimeError(
+                        "dead_media is enabled but torrent_housekeeping has "
+                        "no qbittorrent_url configured; cannot reach qbt"
+                    )
+                from ott.clients.qbittorrent import QBittorrentClient
+                qbt_for_dead = QBittorrentClient(
+                    url=config.torrent_housekeeping_qbt_url,
+                    username=config.torrent_housekeeping_qbt_username,
+                    password=config.torrent_housekeeping_qbt_password,
+                    cookie_jar_path=config.torrent_housekeeping_cookie_jar,
+                )
+
+            _managers['dead_media'] = DeadMediaManager(
+                qbt=qbt_for_dead,
+                sonarr_client=sonarr_client,
+                radarr_client=radarr_client,
+                telegram=telegram,
+                chat_id=config.dead_media_chat_id,
+                thread_id=config.dead_media_thread_id,
+                metadata_timeout_hours=config.dead_media_metadata_timeout_hours,
+                import_fallback_hours=config.dead_media_import_fallback_hours,
+                auto_unmonitor_after_blocklists=config.dead_media_auto_unmonitor_after_blocklists,
+                auto_drop_malicious=config.dead_media_auto_drop_malicious,
+            )
+            logger.info(
+                f"  ✓ Dead-media ready (chat={config.dead_media_chat_id} "
+                f"thread={config.dead_media_thread_id} "
+                f"poll={config.dead_media_poll_interval_minutes}min "
+                f"meta_timeout={config.dead_media_metadata_timeout_hours}h "
+                f"import_fallback={config.dead_media_import_fallback_hours}h "
+                f"auto_drop_malicious={config.dead_media_auto_drop_malicious})"
+            )
+        except Exception as e:
+            logger.error(f"  ✗ Failed to init dead-media: {e}", exc_info=True)
+            logger.warning("  ⚠ Continuing without dead-media")
+            _managers['dead_media'] = None
+    else:
+        logger.info("🩹 Dead-media disabled by config")
+        _managers['dead_media'] = None
+
     # Apply rating-gate config
     for mgr in (_managers['radarr'], _managers['sonarr']):
         mgr.rating_gate_enabled = config.rating_gate_enabled
@@ -439,6 +542,11 @@ def main():
         lambda: _managers['sonarr'],
         lambda: _managers['telegram'],
         webhook_secret=config.telegram_webhook_secret,
+        get_dead_media_mgr=(
+            (lambda: _managers.get('dead_media'))
+            if config.dead_media_enabled
+            else None
+        ),
     )
     register_health_routes(
         lambda: _managers['radarr'],
@@ -461,11 +569,26 @@ def main():
     
     # Register CLI commands
     logger.info("Registering CLI commands...")
+    # Pass the housekeeping + dead-media managers via lambdas so hot-reload
+    # swaps are picked up automatically by their cron loops. Pass `None`
+    # (not a lambda) when disabled so the corresponding cron is never spawned.
+    housekeeping_getter = (
+        (lambda: _managers.get('torrent_housekeeping'))
+        if config.torrent_housekeeping_enabled
+        else None
+    )
+    dead_media_getter = (
+        (lambda: _managers.get('dead_media'))
+        if config.dead_media_enabled
+        else None
+    )
     register_commands(
         lambda: _managers['radarr'],
         lambda: _managers['sonarr'],
         fastapi_app,
-        config
+        config,
+        get_housekeeping_mgr=housekeeping_getter,
+        get_dead_media_mgr=dead_media_getter,
     )
     
     # Set up config hot reload

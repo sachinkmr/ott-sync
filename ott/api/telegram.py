@@ -2,12 +2,17 @@
 
 import hmac
 import logging
-from typing import Callable
+from typing import Callable, Optional
 from fastapi import Request, HTTPException
+import requests
 
 from .app import app
 from .models import parse_callback_action
 from ..constants import COMMAND_MOVIES_SEARCH, COMMAND_SERIES_SEARCH
+from ..managers.dead_media import (
+    CALLBACK_PREFIX as DEAD_MEDIA_PREFIX,
+    VALID_USER_ACTIONS as DEAD_MEDIA_VALID_ACTIONS,
+)
 
 logger = logging.getLogger("ott-hooks")
 
@@ -16,11 +21,86 @@ logger = logging.getLogger("ott-hooks")
 _TG_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
 
+def _tg_answer_callback(
+    telegram, callback_query: dict, text: str, show_alert: bool = True,
+) -> None:
+    """Call Telegram's answerCallbackQuery to dismiss the loading spinner on
+    the button and show feedback to the user. Best-effort; failure just
+    leaves a spinning button (Telegram drops it after a few seconds).
+
+    `show_alert=True` (default) renders as a modal that stays on screen
+    until the user taps OK — appropriate for dead-media actions where the
+    feedback explains a side-effect (drop, unmonitor, search). The default
+    toast variant (show_alert=False) auto-dismisses after ~5 seconds and is
+    easy to miss on mobile.
+
+    The telegram client doesn't expose this directly because it's a
+    callback-only operation that needs the callback_query id, which only
+    exists inside this handler — keeping it local avoids a wider API change.
+    """
+    if not getattr(telegram, "enabled", False):
+        return
+    token = getattr(telegram, "token", None)
+    cb_id = callback_query.get("id")
+    if not token or not cb_id:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/answerCallbackQuery",
+            json={
+                "callback_query_id": cb_id,
+                "text": text[:200],
+                "show_alert": show_alert,
+            },
+            timeout=5,
+        )
+    except requests.RequestException as e:
+        logger.warning(f"[TG-DEAD] answerCallbackQuery failed: {e}")
+
+
+def _tg_edit_message_text(telegram, chat_id, message_id: int, new_text: str) -> None:
+    """Edit the original alert message in place. Used after a dead-media
+    action so the inline buttons disappear and the verdict shows instead.
+
+    Removes reply_markup explicitly so the buttons aren't rendered after the
+    action lands (otherwise users could re-click and get an
+    'already actioned' popup, which is correct but noisy).
+    """
+    if not getattr(telegram, "enabled", False):
+        return
+    token = getattr(telegram, "token", None)
+    if not token:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/editMessageText",
+            json={
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": new_text,
+                "parse_mode": "Markdown",
+                "reply_markup": {"inline_keyboard": []},
+            },
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        logger.warning(f"[TG-DEAD] editMessageText failed: {e}")
+
+
+def _strip_prior_verdict(text: str) -> str:
+    """If the message was already edited (re-click case), drop the previous
+    'Action taken:' tail so we don't grow it indefinitely."""
+    marker = "\n\n*Action taken:*"
+    idx = text.find(marker)
+    return text[:idx] if idx >= 0 else text
+
+
 def register_telegram_routes(
     get_radarr_mgr: Callable,
     get_sonarr_mgr: Callable,
     get_telegram: Callable,
     webhook_secret: str = "",
+    get_dead_media_mgr: Optional[Callable] = None,
 ):
     """Register Telegram callback endpoint
 
@@ -285,6 +365,66 @@ def register_telegram_routes(
             )
 
             logger.info(f"[TG-MANUAL] Download approved by {user} for {item_type} id={item_id}")
+            return {"ok": True}
+
+        # ─────────────────────────────────────────────
+        # Dead-media callbacks (Phase B action buttons)
+        # ─────────────────────────────────────────────
+        # callback_data format: "dead-media:<action>:<notification_id>"
+        # e.g. "dead-media:search:42", "dead-media:unmonitor_series:42"
+        if callback_data.startswith(DEAD_MEDIA_PREFIX):
+            if get_dead_media_mgr is None:
+                logger.warning("[TG-DEAD] callback received but dead-media manager not wired")
+                _tg_answer_callback(telegram, cb, "❌ Dead-media manager disabled")
+                return {"ok": True}
+
+            dm = get_dead_media_mgr()
+            if dm is None:
+                # Disabled by hot-reload between alert and click.
+                _tg_answer_callback(telegram, cb, "❌ Dead-media manager disabled")
+                return {"ok": True}
+
+            # Parse "dead-media:<action>:<notif_id>"
+            try:
+                rest = callback_data[len(DEAD_MEDIA_PREFIX):]
+                action, notif_id_str = rest.split(":", 1)
+                notification_id = int(notif_id_str)
+            except (ValueError, IndexError):
+                logger.error(f"[TG-DEAD] Malformed callback_data: {callback_data!r}")
+                _tg_answer_callback(telegram, cb, "❌ Bad callback data")
+                return {"ok": True}
+
+            if action not in DEAD_MEDIA_VALID_ACTIONS:
+                logger.error(f"[TG-DEAD] Invalid action: {action!r}")
+                _tg_answer_callback(telegram, cb, "❌ Unknown action")
+                return {"ok": True}
+
+            # Run the action. The manager's handle_user_action is idempotent —
+            # repeated clicks return the prior outcome instead of re-firing.
+            success, verdict_text = dm.handle_user_action(notification_id, action)
+            logger.info(
+                f"[TG-DEAD] {user} clicked {action} on notif {notification_id} "
+                f"→ success={success} verdict={verdict_text}"
+            )
+
+            # Acknowledge the click so the spinning button stops.
+            _tg_answer_callback(telegram, cb, verdict_text)
+
+            # Edit the original message to show the chosen verdict instead
+            # of the inline buttons. Best-effort — if it fails, the verdict
+            # is still in the callback popup and the user knows the outcome.
+            msg = cb.get("message", {})
+            chat_id = msg.get("chat", {}).get("id")
+            message_id = msg.get("message_id")
+            existing_text = msg.get("text", "") or msg.get("caption", "")
+            if chat_id and message_id and existing_text:
+                # Append the verdict line; strip any prior verdict (re-click case).
+                cleaned = _strip_prior_verdict(existing_text)
+                new_text = f"{cleaned}\n\n*Action taken:* {verdict_text} — _by {user}_"
+                _tg_edit_message_text(
+                    telegram, chat_id, message_id, new_text,
+                )
+
             return {"ok": True}
 
         return {"ok": True}

@@ -24,6 +24,7 @@ class TelegramNotifier:
         self.enabled: bool = config.get("enabled", False)
         self.token: str | None = config.get("bot_token")
         self.chat_id: str | None = config.get("chat_id")
+        self.thread_id: int | None = config.get("thread_id")
         self.region: str = config.get("region", "your region")
         
         if self.enabled and (not self.token or not self.chat_id):
@@ -38,6 +39,7 @@ class TelegramNotifier:
         message: str,
         buttons: list[list[dict]] | None = None,
         chat_id: str | int | None = None,
+        thread_id: int | None = None,
     ) -> bool:
         """Send text message to Telegram
 
@@ -48,6 +50,12 @@ class TelegramNotifier:
             chat_id: Optional target chat id. Falls back to the notifier's
                 default chat_id (set at construction) when omitted. Use this
                 to route admin alerts to a separate chat.
+            thread_id: Optional Telegram forum-topic ID. Falls back to the
+                notifier's default thread_id (from config). Pass an explicit
+                value to route into a different topic — e.g. dead-media alerts
+                go to their own thread, separate from OTT/anime ones. Pass 0
+                to force the main chat (skip threading) even when the
+                notifier has a default thread_id set.
 
         Returns:
             True if message sent successfully, False otherwise
@@ -61,12 +69,17 @@ class TelegramNotifier:
             logger.error("[TG] Missing bot_token or chat_id")
             return False
 
+        # Per-call thread override. None = use notifier default; 0 = explicit
+        # "no thread" (post to main chat); positive int = route to that topic.
+        target_thread = thread_id if thread_id is not None else self.thread_id
+
         payload = {
             "chat_id": target_chat,
             "text": message,
             "parse_mode": "Markdown",
         }
-        
+        if target_thread:
+            payload["message_thread_id"] = target_thread
         if buttons:
             payload["reply_markup"] = {"inline_keyboard": buttons}
 
@@ -94,6 +107,7 @@ class TelegramNotifier:
         caption: str,
         buttons: list[list[dict]] | None = None,
         chat_id: str | int | None = None,
+        thread_id: int | None = None,
     ) -> bool:
         """Send photo with caption to Telegram
 
@@ -104,6 +118,9 @@ class TelegramNotifier:
                 Format: [[{"text": "Label", "callback_data": "data"}]]
             chat_id: Optional target chat id. Falls back to the notifier's
                 default chat_id (set at construction) when omitted.
+            thread_id: Optional Telegram forum-topic ID. Same semantics as
+                send(): None = use notifier default, 0 = main chat, positive
+                int = route to that topic. Dead-media routes here.
 
         Returns:
             True if photo sent successfully, False otherwise
@@ -117,13 +134,17 @@ class TelegramNotifier:
             logger.error("[TG] Missing bot_token or chat_id")
             return False
 
+        # Per-call thread override (see send()).
+        target_thread = thread_id if thread_id is not None else self.thread_id
+
         payload = {
             "chat_id": target_chat,
             "photo": photo_url,
             "caption": caption,
             "parse_mode": "Markdown",
         }
-        
+        if target_thread:
+            payload["message_thread_id"] = target_thread
         if buttons:
             payload["reply_markup"] = {"inline_keyboard": buttons}
 

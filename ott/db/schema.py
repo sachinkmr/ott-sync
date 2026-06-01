@@ -267,3 +267,57 @@ class PendingApprovalModel(Base):
         Index('idx_pending_appr_item', 'arr_type', 'arr_item_id'),
         Index('idx_pending_appr_resolved', 'resolved_at'),
     )
+
+
+class DeadMediaNotificationModel(Base):
+    """Telegram alerts dispatched by the dead-media manager.
+
+    One row per (group_key) per send. group_key buckets torrents into a single
+    series/movie/detector group; we don't re-notify the same group until
+    either the user acts on it (action_taken set) or the dedup TTL expires.
+
+    The integer `id` is what we embed in Telegram callback_data (`dead-media:
+    <action>:<id>`) — short and stable. group_key (text) is what the cron
+    uses to find existing notifications when deciding whether to re-alert.
+    """
+    __tablename__ = "dead_media_notifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Bucketing key: "{arr}:{item_id}:{detector}" e.g. "sonarr:524:stuck_metadata".
+    # Used by cron for dedup; not put on the wire directly.
+    group_key = Column(String(200), nullable=False, index=True)
+    # arr classification + foreign-key-ish IDs into Sonarr/Radarr. item_id=0
+    # means "unknown series/movie" (orphaned grab Sonarr has no record of).
+    arr = Column(String(20), nullable=False)
+    item_id = Column(Integer, nullable=False, default=0)
+    detector = Column(String(50), nullable=False)
+    # Title at send time (cached so message-edit text stays consistent even
+    # if the series is later renamed/deleted).
+    title = Column(String(500), nullable=True)
+    sent_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    # Telegram message_id of the alert — used for editMessageText after the
+    # user picks an action (replace "✏️ pending" with the chosen verdict).
+    telegram_message_id = Column(Integer, nullable=True)
+    telegram_chat_id = Column(String(50), nullable=True)
+    # Action chosen by the user (null until acted on). Values:
+    #   'search'           — blocklist + re-search Sonarr
+    #   'unmonitor_eps'    — unmonitor the listed episodes
+    #   'unmonitor_series' — unmonitor the whole series
+    #   'drop'             — blocklist + remove from qbt, no re-search
+    #   'auto_unmonitor'   — auto-unmonitor fired without user action
+    action_taken = Column(String(20), nullable=True)
+    action_at = Column(DateTime, nullable=True)
+    # JSON-encoded list of torrent hashes that were in this group at send
+    # time. Needed by the callback handler to delete them from qBittorrent.
+    affected_hashes = Column(Text, nullable=True)
+    # JSON-encoded list of episode labels ("S01E03") or episode IDs.
+    # Episode IDs go through Sonarr's PUT /episode/monitor; labels are
+    # display-only.
+    affected_episodes = Column(Text, nullable=True)
+    affected_episode_ids = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index('idx_dead_media_group_key', 'group_key'),
+        Index('idx_dead_media_sent_at', 'sent_at'),
+        Index('idx_dead_media_action', 'action_taken'),
+    )

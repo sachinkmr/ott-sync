@@ -150,5 +150,31 @@
       "auto_run_on_startup": true,
       "parallel_processing": true
     }
+  },
+
+  "_comment_torrent_housekeeping": "Periodic qBittorrent maintenance. Resumes stalled torrents and deletes completed torrents whose files have been hardlinked into the media library (nlink >= 2 means *arr imported). Without the hardlink check, orphan files accumulate when *arr's import races/fails. Requires read access to the download path (mount /stream:ro in docker-compose).",
+  "torrent_housekeeping": {
+    "_comment_enabled": "Set true to enable the housekeeping cron.",
+    "enabled": false,
+    "_comment_qbittorrent": "qBittorrent WebUI URL + credentials. Use the container/service name when running in Docker (e.g. http://vpn:8081 if qbt is behind a VPN container).",
+    "qbittorrent_url": "http://vpn:8081",
+    "qbittorrent_username": "YOUR_QBT_USERNAME",
+    "qbittorrent_password": "YOUR_QBT_PASSWORD",
+    "_comment_cookie_jar": "Cookie jar path inside the container. Persisted to /config so logins survive restarts.",
+    "cookie_jar_path": "/config/qbt_cookie.jar",
+    "_comment_intervals": "interval_minutes = how often the cron fires. min_age_minutes = how long after completion_on before we attempt cleanup (the hardlink check is the real correctness gate; this is just a small buffer).",
+    "interval_minutes": 10,
+    "min_age_minutes": 10
+  },
+
+  "_comment_dead_media": "Future: detects torrents that need human attention — stuck in metaDL with 0 seeds, or completed-but-not-imported beyond import_fallback_hours. Sends batched Telegram notifications (one message per series) to chat_id with action buttons. thread_id routes the alerts into a specific forum topic when chat_id is a supergroup with topics enabled (set to 0 to post in the main chat). auto_unmonitor_after_blocklists=0 means humans decide via buttons; set N>0 to auto-unmonitor episodes Sonarr has blocklisted N times.",
+  "dead_media": {
+    "enabled": false,
+    "chat_id": "YOUR_TELEGRAM_DEAD_MEDIA_CHAT_ID",
+    "thread_id": 0,
+    "poll_interval_minutes": 30,
+    "metadata_timeout_hours": 4,
+    "import_fallback_hours": 2,
+    "auto_unmonitor_after_blocklists": 0
   }
 }

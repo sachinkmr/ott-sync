@@ -896,13 +896,18 @@ class OTTBaseManager(ABC):
             # webhooks race) falls through to the full flow below - it will
             # cancel the queue AND send the notification, so the user still
             # gets prompted for approval.
-            if event == "Grab" and self.processed_tag in current_tags:
+            pending_approval_tag = self._get_or_create_tag("ott-pending-approval")
+            already_notified = (
+                self.processed_tag in current_tags
+                or pending_approval_tag in current_tags
+            )
+            if event == "Grab" and already_notified:
                 logger.info(f"[MANUAL-MODE] Grab event for already-notified item - removing from queue only")
                 self._cancel_queue_items_for(item_id)
                 return
-            
+
             # Skip if already processed (notification already sent for Add events)
-            if self.processed_tag in current_tags:
+            if already_notified:
                 logger.info(f"[MANUAL-MODE] Item already notified, skipping")
                 return
             
@@ -963,6 +968,7 @@ class OTTBaseManager(ABC):
                 imdb_rating=ratings.get("imdb"),
                 anilist_rating=ratings.get("anilist"),
                 manual_mode=True,
+                overview=item.get("overview"),
             )
             
             # 7. Send notification with approve button
@@ -1025,16 +1031,24 @@ class OTTBaseManager(ABC):
     
         if self.processed_tag in current_tags:
             logger.info("[DECISION] ott_processed present → skip JustWatch lookup")
-            
-            # 🚨 Check if item was previously blocked (has ott-skipped tag)
-            if self.skipped_tag in tags:
+
+            # 🚨 Re-block only when user previously bypassed via ott-override and grabbed again.
+            # Without ott-override, ott-skipped on a second-season Grab is just a repeat from
+            # the same series batch — cancel queue silently, don't re-notify.
+            if self.skipped_tag in current_tags and self.override_tag in current_tags:
                 was_previously_blocked = True
                 logger.warning(
-                    f"[DECISION] ott-skipped present → item was previously blocked. "
-                    f"Re-enforcing block for {self.item_type()} id={item_id}"
+                    f"[DECISION] ott-skipped + ott-override present → item was previously "
+                    f"bypassed and is being re-blocked for {self.item_type()} id={item_id}"
                 )
-                # Re-use previous OTT detection for Telegram notification
                 providers = ["OTT"]  # Placeholder to trigger notification flow
+            elif self.skipped_tag in current_tags:
+                logger.info(
+                    f"[DECISION] ott-skipped present, no override → cancelling queue "
+                    f"without re-notifying (likely multi-season batch grab)"
+                )
+                self._cancel_queue_items_for(item_id)
+                return
         else:
             # Extract TMDb/IMDb IDs for better matching accuracy
             tmdb_id = item.get("tmdbId")
@@ -1093,6 +1107,7 @@ class OTTBaseManager(ABC):
                 imdb_rating=ratings.get("imdb"),
                 anilist_rating=ratings.get("anilist"),
                 manual_mode=False,
+                overview=item.get("overview"),
             )
     
             buttons = [[{
@@ -1261,22 +1276,27 @@ class OTTBaseManager(ABC):
                     self.client.put(f"{self.item_type()}/{item_id}", json=data)
 
         elif result.decision == Decision.REQUEST_APPROVAL:
-            # Unmonitor + send Telegram approval + record in DB
+            arr_type = "radarr" if media_type == "movie" else "sonarr"
             self._unmonitor_item(item_id)
             self._add_tag_to_item(item_id, "ott-pending-approval")
-            PendingApprovalRepository.create(
-                media_type=tmdb_media, tmdb_id=tmdb_id or 0,
-                arr_type="radarr" if media_type == "movie" else "sonarr",
-                arr_item_id=item_id, title=title, reason=result.reason,
-                rating_score_pct=result.rating.score_pct if result.rating else None,
-                trending=result.trending,
-            )
-            # Send Telegram with the already-fetched ratings
-            ratings = self._fetch_ratings(item)
-            self._send_approval_notification(
-                item=item, item_id=item_id, title=title, year=year,
-                ratings=ratings, tags=tags, reason=result.reason,
-            )
+            if PendingApprovalRepository.is_pending(arr_type=arr_type, arr_item_id=item_id):
+                logger.info(
+                    f"[RATING-GATE] Approval already pending for id={item_id} — "
+                    f"skipping duplicate notification (multi-season grab)"
+                )
+            else:
+                PendingApprovalRepository.create(
+                    media_type=tmdb_media, tmdb_id=tmdb_id or 0,
+                    arr_type=arr_type, arr_item_id=item_id, title=title,
+                    reason=result.reason,
+                    rating_score_pct=result.rating.score_pct if result.rating else None,
+                    trending=result.trending,
+                )
+                ratings = self._fetch_ratings(item)
+                self._send_approval_notification(
+                    item=item, item_id=item_id, title=title, year=year,
+                    ratings=ratings, tags=tags, reason=result.reason,
+                )
 
         elif result.decision == Decision.SKIP_LOW_RATING:
             # Unmonitor + tag ott-low-rating
@@ -1288,20 +1308,25 @@ class OTTBaseManager(ABC):
             )
 
         elif result.decision == Decision.DEFER_NO_RATING:
-            # Unmonitor + tag ott-pending-rating + record in DB
+            arr_type = "radarr" if media_type == "movie" else "sonarr"
             self._unmonitor_item(item_id)
             self._add_tag_to_item(item_id, "ott-pending-rating")
-            PendingEvaluationRepository.create(
-                media_type=tmdb_media, tmdb_id=tmdb_id or 0,
-                arr_type="radarr" if media_type == "movie" else "sonarr",
-                arr_item_id=item_id, title=title,
-                defer_days=self.rating_gate_defer_days,
-                reason=result.reason,
-            )
-            logger.info(
-                f"[RATING-GATE] Deferred {title} "
-                f"(re-check in {self.rating_gate_defer_days} days)"
-            )
+            if PendingEvaluationRepository.find_by_item(arr_type=arr_type, arr_item_id=item_id):
+                logger.info(
+                    f"[RATING-GATE] Already deferred for id={item_id} — "
+                    f"skipping duplicate DB record (multi-season grab)"
+                )
+            else:
+                PendingEvaluationRepository.create(
+                    media_type=tmdb_media, tmdb_id=tmdb_id or 0,
+                    arr_type=arr_type, arr_item_id=item_id, title=title,
+                    defer_days=self.rating_gate_defer_days,
+                    reason=result.reason,
+                )
+                logger.info(
+                    f"[RATING-GATE] Deferred {title} "
+                    f"(re-check in {self.rating_gate_defer_days} days)"
+                )
 
     def _fetch_anilist_rating_for_gate(
         self, title: str, year: int | None,
@@ -1408,6 +1433,7 @@ class OTTBaseManager(ABC):
             imdb_rating=ratings.get("imdb"),
             anilist_rating=ratings.get("anilist"),
             manual_mode=True,
+            overview=item.get("overview"),
         )
         buttons = [[{
             "text": "✅ Approve Download",

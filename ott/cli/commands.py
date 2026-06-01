@@ -20,14 +20,31 @@ logger = logging.getLogger("ott-hooks")
 app = typer.Typer()
 
 
-def register_commands(get_radarr_mgr: Callable, get_sonarr_mgr: Callable, fastapi_app, config):
-    """Register CLI commands
-    
+def register_commands(
+    get_radarr_mgr: Callable,
+    get_sonarr_mgr: Callable,
+    fastapi_app,
+    config,
+    get_housekeeping_mgr: Optional[Callable] = None,
+    get_dead_media_mgr: Optional[Callable] = None,
+):
+    """Register CLI commands.
+
     Args:
-        get_radarr_mgr: Callable that returns current RadarrManager instance
-        get_sonarr_mgr: Callable that returns current SonarrManager instance
-        fastapi_app: FastAPI app instance
-        config: Config instance
+        get_radarr_mgr: Callable that returns the current RadarrManager.
+        get_sonarr_mgr: Callable that returns the current SonarrManager.
+        fastapi_app: FastAPI app instance.
+        config: Config instance.
+        get_housekeeping_mgr: Optional callable returning the current
+            TorrentHousekeepingManager. When set (i.e. torrent_housekeeping
+            is enabled in config), `run_all` spawns a second cron loop that
+            calls `.run()` on it every `torrent_housekeeping.interval_minutes`.
+        get_dead_media_mgr: Optional callable returning the current
+            DeadMediaManager. When set (dead_media enabled in config),
+            `run_all` spawns a third cron loop that scans qBittorrent for
+            stuck torrents and sends Telegram alerts. Runs slower than
+            housekeeping (default 30min vs 10min) because each alert is
+            human-actionable, not a no-op.
     """
     
     @app.command()
@@ -318,7 +335,87 @@ def register_commands(get_radarr_mgr: Callable, get_sonarr_mgr: Callable, fastap
 
         # Start cron in background thread
         threading.Thread(target=run_cron_loop, daemon=True).start()
-        
+
+        # ========== Torrent housekeeping cron (separate from OTT cron) ==========
+        # Runs much more frequently (every N minutes vs. N hours for OTT).
+        # Owns: resume stalled torrents + delete completed-and-hardlinked.
+        # Skipped entirely when get_housekeeping_mgr is None (housekeeping
+        # disabled in config).
+        if get_housekeeping_mgr is not None:
+            def run_housekeeping_loop():
+                # Match the OTT cron's `initial_delay` so we don't immediately
+                # hit qBittorrent before clients/network are settled.
+                initial_delay = config.get(
+                    "cron_initial_delay_seconds",
+                    DEFAULT_CRON_INITIAL_DELAY_SECONDS,
+                )
+                interval_minutes = config.torrent_housekeeping_interval_minutes
+                logger.info(
+                    f"Torrent housekeeping starts in {initial_delay}s, "
+                    f"interval {interval_minutes}min"
+                )
+                time.sleep(initial_delay)
+
+                while True:
+                    try:
+                        mgr = get_housekeeping_mgr()
+                        if mgr is None:
+                            # Reload swapped it out (e.g. user toggled disabled).
+                            # Sleep a tick and recheck.
+                            time.sleep(interval_minutes * 60)
+                            continue
+                        result = mgr.run()
+                        # `result` is a HousekeepingResult dataclass — useful
+                        # counts are already logged inside .run(), so we don't
+                        # duplicate here.
+                        _ = result
+                    except Exception as e:
+                        logger.error(
+                            f"Torrent housekeeping failed: {e}", exc_info=True,
+                        )
+                    time.sleep(interval_minutes * 60)
+
+            threading.Thread(target=run_housekeeping_loop, daemon=True).start()
+            logger.info("  ✓ Torrent housekeeping cron registered")
+
+        # ========== Dead-media cron (separate from housekeeping) ==========
+        # Slower cadence than housekeeping (default 30min vs 10min) because
+        # alerts go to a human — over-frequent polling just adds latency, not
+        # value. Skipped entirely when dead_media is disabled in config.
+        if get_dead_media_mgr is not None:
+            def run_dead_media_loop():
+                # Match the housekeeping initial-delay pattern so neither
+                # cron hits qBittorrent the instant the container starts.
+                initial_delay = config.get(
+                    "cron_initial_delay_seconds",
+                    DEFAULT_CRON_INITIAL_DELAY_SECONDS,
+                )
+                interval_minutes = config.dead_media_poll_interval_minutes
+                logger.info(
+                    f"Dead-media cron starts in {initial_delay}s, "
+                    f"interval {interval_minutes}min"
+                )
+                time.sleep(initial_delay)
+
+                while True:
+                    try:
+                        mgr = get_dead_media_mgr()
+                        if mgr is None:
+                            # Disabled by hot-reload; wait one cycle and recheck.
+                            time.sleep(interval_minutes * 60)
+                            continue
+                        result = mgr.run()
+                        # Result counts are logged inside .run(); just stash.
+                        _ = result
+                    except Exception as e:
+                        logger.error(
+                            f"Dead-media scan failed: {e}", exc_info=True,
+                        )
+                    time.sleep(interval_minutes * 60)
+
+            threading.Thread(target=run_dead_media_loop, daemon=True).start()
+            logger.info("  ✓ Dead-media cron registered")
+
         # Start server in main thread
         logger.info(f"Starting webhook server on {host}:{port}")
         uvicorn.run(

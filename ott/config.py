@@ -201,6 +201,90 @@ class Config:
             "tag_recheck_delay_ms", 1500,
         )
 
+        # ========== Torrent housekeeping (moved from scheduler service) ==========
+        # Two policies fire on each tick:
+        #   1. Resume torrents stuck in pausedDL/stalledDL/queuedDL/stoppedDL
+        #   2. Delete completed torrents (pausedUP/stoppedUP) — only if their
+        #      files are already hardlinked into /stream/media (proof *arr
+        #      imported them). The hardlink check prevents orphaning files
+        #      when *arr's import races / fails.
+        # The dead-media manager (separate, future) handles torrents stuck in
+        # metaDL with 0 seeds, or completed-but-never-imported beyond a
+        # fallback threshold.
+        th_cfg = config_dict.get("torrent_housekeeping", {}) or {}
+        self.torrent_housekeeping_enabled: bool = th_cfg.get("enabled", False)
+        self.torrent_housekeeping_qbt_url: str = th_cfg.get("qbittorrent_url", "")
+        self.torrent_housekeeping_qbt_username: str = th_cfg.get("qbittorrent_username", "")
+        self.torrent_housekeeping_qbt_password: str = th_cfg.get("qbittorrent_password", "")
+        # Cookie jar lives under /config so it survives container restarts and
+        # the cookie persists across ott-hooks redeploys. Default path matches
+        # the legacy scheduler so we can reuse its existing logged-in cookie.
+        self.torrent_housekeeping_cookie_jar: str = th_cfg.get(
+            "cookie_jar_path", "/config/qbt_cookie.jar",
+        )
+        # Cron tick interval. 10min matches the legacy scheduler. Cleanup is
+        # cheap (one API call + statting a few files per torrent), so running
+        # often is fine.
+        self.torrent_housekeeping_interval_minutes: int = th_cfg.get(
+            "interval_minutes", 10,
+        )
+        # Grace window between torrent completion and our delete attempt.
+        # Even though the hardlink check is the real correctness gate, this
+        # keeps us from hammering on torrents the *arr stack is still in the
+        # middle of importing (where nlink may flip from 1 to 2 mid-stat).
+        self.torrent_housekeeping_min_age_minutes: int = th_cfg.get(
+            "min_age_minutes", 10,
+        )
+
+        # ========== Dead media (future manager — config placeholder) ==========
+        # Detects torrents that need human attention: stuck in metaDL with
+        # 0 seeds, or completed-but-not-imported beyond a fallback timeout.
+        # Sends batched-by-series Telegram notification to dead_media_chat_id
+        # with action buttons (search again / unmonitor / drop). Implementation
+        # lands after housekeeping is verified.
+        dm_cfg = config_dict.get("dead_media", {}) or {}
+        self.dead_media_enabled: bool = dm_cfg.get("enabled", False)
+        self.dead_media_chat_id: str = dm_cfg.get("chat_id", "")
+        # Forum-topic / thread ID for the Telegram supergroup. Telegram's
+        # sendMessage takes `message_thread_id` to direct messages into a
+        # specific topic. Routes dead-media alerts into their own thread so
+        # they don't mix with OTT/anime notifications.
+        # Read as int when present so it matches existing telegram.thread_id
+        # field shape; 0 = no thread (send to main chat).
+        thread_raw = dm_cfg.get("thread_id", 0)
+        try:
+            self.dead_media_thread_id: int = int(thread_raw) if thread_raw else 0
+        except (TypeError, ValueError):
+            self.dead_media_thread_id = 0
+        self.dead_media_poll_interval_minutes: int = dm_cfg.get(
+            "poll_interval_minutes", 30,
+        )
+        # A torrent must be stuck in metaDL with 0 seeds for at least this
+        # many hours before we treat it as dead and notify.
+        self.dead_media_metadata_timeout_hours: int = dm_cfg.get(
+            "metadata_timeout_hours", 4,
+        )
+        # A completed-but-unimported torrent (nlink==1) must remain so for
+        # at least this many hours before we escalate via Telegram.
+        self.dead_media_import_fallback_hours: int = dm_cfg.get(
+            "import_fallback_hours", 2,
+        )
+        # Auto-unmonitor an episode once it has accumulated this many
+        # blocklisted releases. 0 disables auto-unmonitor — humans decide via
+        # Telegram buttons.
+        self.dead_media_auto_unmonitor_after_blocklists: int = dm_cfg.get(
+            "auto_unmonitor_after_blocklists", 0,
+        )
+        # Auto-drop releases the heuristic classifier flags as SEVERITY_MALICIOUS
+        # (bad extension, malware bundle markers). False = humans always
+        # approve via Telegram, even for obvious malware. True = the manager
+        # drops + blocklists without prompting, sends a no-buttons notice.
+        # Only the malicious tier auto-acts; wrong_quality / suspicious always
+        # surface as recommendations on a button-bearing message.
+        self.dead_media_auto_drop_malicious: bool = bool(dm_cfg.get(
+            "auto_drop_malicious", False,
+        ))
+
         # Store raw config for backward compatibility
         self._raw_config = config_dict
     
@@ -286,6 +370,35 @@ class Config:
                 "database_backup_interval_hours must be > 0 when "
                 "database_backup_enabled is true"
             )
+
+        # Torrent housekeeping — only validated when enabled, so users who
+        # never opt in don't have to fill in qbt creds. When enabled, fail
+        # fast on bad config rather than crashing in the cron loop later.
+        if self.torrent_housekeeping_enabled:
+            if not self.torrent_housekeeping_qbt_url or not (
+                self.torrent_housekeeping_qbt_url.startswith("http://")
+                or self.torrent_housekeeping_qbt_url.startswith("https://")
+            ):
+                errors.append(
+                    "torrent_housekeeping.qbittorrent_url must start with "
+                    "http:// or https:// when enabled"
+                )
+            if not self.torrent_housekeeping_qbt_username:
+                errors.append(
+                    "torrent_housekeeping.qbittorrent_username is required when enabled"
+                )
+            if not self.torrent_housekeeping_qbt_password:
+                errors.append(
+                    "torrent_housekeeping.qbittorrent_password is required when enabled"
+                )
+            if self.torrent_housekeeping_interval_minutes <= 0:
+                errors.append(
+                    "torrent_housekeeping.interval_minutes must be > 0 when enabled"
+                )
+            if self.torrent_housekeeping_min_age_minutes < 0:
+                errors.append(
+                    "torrent_housekeeping.min_age_minutes must be >= 0"
+                )
 
         if errors:
             raise ConfigurationError(
