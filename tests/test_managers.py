@@ -337,3 +337,53 @@ def test_movie_put_failure_no_raise(mock_justwatch, mock_telegram, sample_tag_re
     payload = _movie_download_payload(resolution=1080)
     m._handle_download_complete(payload, payload["movie"], 10, "M")  # must not raise
     assert _puts_to(client, "movie/10"), "PUT should still have been attempted"
+
+
+def _ep(ep_id, season, has_file, resolution, monitored=True):
+    """Build an episode dict as returned by GET /episode?includeEpisodeFile=true."""
+    return {
+        "id": ep_id,
+        "seasonNumber": season,
+        "hasFile": has_file,
+        "monitored": monitored,
+        "episodeFile": (
+            {"quality": {"quality": {"resolution": resolution}}} if has_file else None
+        ),
+    }
+
+
+def _sonarr(client, mock_justwatch, mock_telegram):
+    return SonarrManager(
+        arr_client=client, justwatch_client=mock_justwatch,
+        telegram=mock_telegram, ott_providers={"Netflix"},
+    )
+
+
+def test_episode_settled(arr_mock, mock_justwatch, mock_telegram):
+    m = _sonarr(arr_mock, mock_justwatch, mock_telegram)
+    assert m._episode_settled(_ep(1, 1, True, 1080), 720) is True
+    assert m._episode_settled(_ep(2, 1, True, 480), 720) is False
+    assert m._episode_settled(_ep(3, 1, False, 0), 720) is False
+
+
+def test_season_complete(arr_mock, mock_justwatch, mock_telegram):
+    m = _sonarr(arr_mock, mock_justwatch, mock_telegram)
+    full = [_ep(1, 1, True, 1080), _ep(2, 1, True, 720), _ep(3, 1, True, 1080)]
+    assert m._season_complete(full, 1, 720) is True
+    mixed = [_ep(1, 1, True, 1080), _ep(2, 1, True, 480)]
+    assert m._season_complete(mixed, 1, 720) is False
+    assert m._season_complete(full, 2, 720) is False  # no episodes in season 2
+
+
+def test_series_fully_downloaded(arr_mock, mock_justwatch, mock_telegram):
+    m = _sonarr(arr_mock, mock_justwatch, mock_telegram)
+    full = [_ep(1, 1, True, 1080), _ep(2, 1, True, 1080), _ep(3, 2, True, 720)]
+    assert m._series_fully_downloaded(full, 720) is True
+    gap = [_ep(1, 1, True, 1080), _ep(2, 1, False, 0)]
+    assert m._series_fully_downloaded(gap, 720) is False
+    # specials (season 0) are ignored
+    with_special = [_ep(1, 1, True, 1080), _ep(99, 0, False, 0)]
+    assert m._series_fully_downloaded(with_special, 720) is True
+    # only specials -> no main episodes -> False
+    only_special = [_ep(99, 0, True, 1080)]
+    assert m._series_fully_downloaded(only_special, 720) is False

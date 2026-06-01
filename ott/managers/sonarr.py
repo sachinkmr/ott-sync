@@ -37,11 +37,37 @@ class SonarrManager(OTTBaseManager):
     
     def item_type(self) -> str:
         """Get item type for Sonarr
-        
+
         Returns:
             "series"
         """
         return "series"
+
+    def _episode_settled(self, episode: dict, threshold: int) -> bool:
+        """True when an episode has a file at or above the resolution threshold."""
+        return bool(episode.get("hasFile")) and (
+            self._file_resolution(episode.get("episodeFile")) >= threshold
+        )
+
+    def _season_complete(
+        self, episodes: list[dict], season_number: int, threshold: int,
+    ) -> bool:
+        """True when every episode of the given season is settled (>= threshold)."""
+        season_eps = [e for e in episodes if e.get("seasonNumber") == season_number]
+        return bool(season_eps) and all(
+            self._episode_settled(e, threshold) for e in season_eps
+        )
+
+    def _series_fully_downloaded(self, episodes: list[dict], threshold: int) -> bool:
+        """True when every non-special (seasonNumber > 0) episode is settled.
+
+        Specials (season 0) are excluded so unobtained specials never block a
+        series-level unmonitor.
+        """
+        main_eps = [e for e in episodes if e.get("seasonNumber", 0) > 0]
+        return bool(main_eps) and all(
+            self._episode_settled(e, threshold) for e in main_eps
+        )
 
     def _process_webhook_locked(self, payload: dict, event: str, item: dict,
                                   title: str, year: int, item_id: int, tags: set) -> None:
