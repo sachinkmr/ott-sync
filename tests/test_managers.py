@@ -326,3 +326,14 @@ def test_movie_already_unmonitored_no_put(
     payload = _movie_download_payload(resolution=1080)
     m._handle_download_complete(payload, payload["movie"], 10, "M")
     assert not _puts_to(client, "movie/10")
+
+
+def test_movie_put_failure_no_raise(mock_justwatch, mock_telegram, sample_tag_response):
+    """A failed unmonitor PUT is handled gracefully (no exception)."""
+    movie = {"id": 10, "title": "M", "year": 2020, "monitored": True, "tags": []}
+    client = _make_arr_mock(tag_responses=sample_tag_response, item_by_id={10: movie})
+    client.put = Mock(return_value=None)  # simulate write failure
+    m = _radarr(client, mock_justwatch, mock_telegram)
+    payload = _movie_download_payload(resolution=1080)
+    m._handle_download_complete(payload, payload["movie"], 10, "M")  # must not raise
+    assert _puts_to(client, "movie/10"), "PUT should still have been attempted"

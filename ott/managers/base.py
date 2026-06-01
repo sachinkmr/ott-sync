@@ -1415,6 +1415,10 @@ class OTTBaseManager(ABC):
         overrides this for the episode→season→series roll-up. Runs under the
         per-item lock (held by added_hook). Idempotent: no PUT when the item is
         already unmonitored.
+
+        Note: ``item`` carries webhook-payload data and may be stale; the base
+        implementation re-fetches current state from the API before the PUT to
+        avoid clobbering concurrent mutations.
         """
         threshold = self.unmonitor_on_download_min_resolution
         resolution = self._file_resolution(payload.get("movieFile"))
@@ -1438,10 +1442,15 @@ class OTTBaseManager(ABC):
             )
             return
         data["monitored"] = False
-        if self.client.put(f"{self.item_type()}/{item_id}", json=data):
+        update_res = self.client.put(f"{self.item_type()}/{item_id}", json=data)
+        if update_res:
             logger.info(
                 f"[UNMONITOR] Unmonitored {self.item_type()} id={item_id} "
                 f"'{title}' ({resolution}p)"
+            )
+        else:
+            logger.error(
+                f"[UNMONITOR] Failed to unmonitor {self.item_type()} id={item_id}"
             )
 
     def _file_resolution(self, file_obj: dict | None) -> int:
