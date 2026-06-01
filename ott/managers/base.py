@@ -845,6 +845,15 @@ class OTTBaseManager(ABC):
             )
             return
 
+        # ⬇️ Unmonitor-on-download: a completed import means we (maybe) stop
+        # monitoring. Placed before manual-add detection so manual adds are also
+        # unmonitored; override items already returned above and stay untouched.
+        if self.unmonitor_on_download_enabled and event == "Download":
+            with self._get_item_lock(item_id):
+                logger.debug(f"[LOCK] Acquired lock for download-complete id={item_id}")
+                self._handle_download_complete(payload, item, item_id, title)
+            return
+
         # 🏷️ Manual-add detection (inverse tag match)
         if self._handle_manual_add(item_id, tags):
             return
@@ -1395,6 +1404,45 @@ class OTTBaseManager(ABC):
         except Exception as e:
             logger.error(f"[RATING-GATE] AniList rating fetch failed for '{title}': {e}")
             return None, False
+
+    def _handle_download_complete(
+        self, payload: dict, item: dict, item_id: int, title: str,
+    ) -> None:
+        """Unmonitor an item after a completed import, if quality is good enough.
+
+        Base (movie) behavior: unmonitor the movie when the imported file's
+        resolution meets unmonitor_on_download_min_resolution. SonarrManager
+        overrides this for the episode→season→series roll-up. Runs under the
+        per-item lock (held by added_hook). Idempotent: no PUT when the item is
+        already unmonitored.
+        """
+        threshold = self.unmonitor_on_download_min_resolution
+        resolution = self._file_resolution(payload.get("movieFile"))
+        if resolution < threshold:
+            logger.info(
+                f"[UNMONITOR] {self.item_type()} id={item_id} '{title}' imported "
+                f"at {resolution}p < {threshold}p — keeping monitored for upgrade"
+            )
+            return
+
+        res = self.client.get(f"{self.item_type()}/{item_id}")
+        if not res:
+            logger.error(
+                f"[UNMONITOR] Failed to fetch {self.item_type()} id={item_id}"
+            )
+            return
+        data = res.json()
+        if not data.get("monitored", False):
+            logger.debug(
+                f"[UNMONITOR] {self.item_type()} id={item_id} already unmonitored"
+            )
+            return
+        data["monitored"] = False
+        if self.client.put(f"{self.item_type()}/{item_id}", json=data):
+            logger.info(
+                f"[UNMONITOR] Unmonitored {self.item_type()} id={item_id} "
+                f"'{title}' ({resolution}p)"
+            )
 
     def _file_resolution(self, file_obj: dict | None) -> int:
         """Extract quality.quality.resolution (int) from an *arr file object.

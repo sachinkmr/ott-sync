@@ -219,3 +219,110 @@ def test_file_resolution(arr_mock, mock_justwatch, mock_telegram):
     assert m._file_resolution({"quality": {"quality": {}}}) == 0
     assert m._file_resolution({}) == 0
     assert m._file_resolution(None) == 0
+
+
+def _movie_download_payload(movie_id=10, tags=None, resolution=1080, event="Download"):
+    return {
+        "eventType": event,
+        "movie": {"id": movie_id, "title": "M", "year": 2020, "tags": tags or []},
+        "movieFile": {"quality": {"quality": {"resolution": resolution}}},
+    }
+
+
+def _radarr(client, mock_justwatch, mock_telegram, **kwargs):
+    return RadarrManager(
+        arr_client=client, justwatch_client=mock_justwatch,
+        telegram=mock_telegram, ott_providers={"Netflix"}, **kwargs,
+    )
+
+
+def test_download_event_routes_to_handler(arr_mock, mock_justwatch, mock_telegram):
+    m = _radarr(arr_mock, mock_justwatch, mock_telegram)
+    m._handle_download_complete = Mock()
+    m._process_webhook_locked = Mock()
+    m.added_hook(_movie_download_payload())
+    m._handle_download_complete.assert_called_once()
+    m._process_webhook_locked.assert_not_called()
+
+
+def test_download_event_disabled_routes_to_normal_flow(arr_mock, mock_justwatch, mock_telegram):
+    m = _radarr(arr_mock, mock_justwatch, mock_telegram)
+    m.unmonitor_on_download_enabled = False
+    m._handle_download_complete = Mock()
+    m._process_webhook_locked = Mock()
+    m.added_hook(_movie_download_payload())
+    m._handle_download_complete.assert_not_called()
+    m._process_webhook_locked.assert_called_once()
+
+
+def test_download_event_override_skipped(arr_mock, mock_justwatch, mock_telegram):
+    m = _radarr(arr_mock, mock_justwatch, mock_telegram)
+    m._handle_download_complete = Mock()
+    m._process_webhook_locked = Mock()
+    # tag id 3 == ott-override in sample_tag_response
+    m.added_hook(_movie_download_payload(tags=[3]))
+    m._handle_download_complete.assert_not_called()
+    m._process_webhook_locked.assert_not_called()
+
+
+def test_download_event_manual_add_still_unmonitored(arr_mock, mock_justwatch, mock_telegram):
+    # manual-add detection must NOT skip unmonitor-on-download: the dispatch is
+    # placed before _handle_manual_add, so it is bypassed for Download events.
+    m = _radarr(
+        arr_mock, mock_justwatch, mock_telegram,
+        manual_add_detection_enabled=True, import_list_tags=["list-trakt"],
+    )
+    m._handle_download_complete = Mock()
+    m._handle_manual_add = Mock()
+    m._process_webhook_locked = Mock()
+    m.added_hook(_movie_download_payload())  # tags=[] -> would be a "manual add"
+    m._handle_download_complete.assert_called_once()
+    m._handle_manual_add.assert_not_called()
+
+
+def test_grab_event_routes_to_normal_flow(arr_mock, mock_justwatch, mock_telegram):
+    m = _radarr(arr_mock, mock_justwatch, mock_telegram)
+    m._handle_download_complete = Mock()
+    m._process_webhook_locked = Mock()
+    m.added_hook(_movie_download_payload(event="Grab"))
+    m._handle_download_complete.assert_not_called()
+    m._process_webhook_locked.assert_called_once()
+
+
+def _puts_to(client, endpoint):
+    return [c for c in client.put.call_args_list if c.args and c.args[0] == endpoint]
+
+
+def test_movie_unmonitored_when_quality_meets_threshold(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    movie = {"id": 10, "title": "M", "year": 2020, "monitored": True, "tags": []}
+    client = _make_arr_mock(tag_responses=sample_tag_response, item_by_id={10: movie})
+    m = _radarr(client, mock_justwatch, mock_telegram)
+    payload = _movie_download_payload(resolution=1080)
+    m._handle_download_complete(payload, payload["movie"], 10, "M")
+    puts = _puts_to(client, "movie/10")
+    assert puts, "expected a PUT to movie/10"
+    assert puts[-1].kwargs["json"]["monitored"] is False
+
+
+def test_movie_kept_monitored_below_threshold(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    movie = {"id": 10, "title": "M", "year": 2020, "monitored": True, "tags": []}
+    client = _make_arr_mock(tag_responses=sample_tag_response, item_by_id={10: movie})
+    m = _radarr(client, mock_justwatch, mock_telegram)
+    payload = _movie_download_payload(resolution=480)
+    m._handle_download_complete(payload, payload["movie"], 10, "M")
+    assert not _puts_to(client, "movie/10")
+
+
+def test_movie_already_unmonitored_no_put(
+    mock_justwatch, mock_telegram, sample_tag_response,
+):
+    movie = {"id": 10, "title": "M", "year": 2020, "monitored": False, "tags": []}
+    client = _make_arr_mock(tag_responses=sample_tag_response, item_by_id={10: movie})
+    m = _radarr(client, mock_justwatch, mock_telegram)
+    payload = _movie_download_payload(resolution=1080)
+    m._handle_download_complete(payload, payload["movie"], 10, "M")
+    assert not _puts_to(client, "movie/10")
